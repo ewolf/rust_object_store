@@ -1,6 +1,6 @@
 //pub mod record_store;
 
-use serde::{Serialize, Deserialize,de::DeserializeOwned};
+use serde::{Serialize, Deserialize};
 use std::fs;
 use std::fs::{OpenOptions,File};
 use std::vec::Vec;
@@ -20,14 +20,23 @@ pub struct Silo<T: Serialize + for<'de> Deserialize<'de>> {
 }
 
 pub struct RecycleSilo {
-    data_silo: Silo<SiloIdData>,
-    recycler_silo: Silo<SiloByteData>,
+    data_silo: Silo<SiloByteData>,
+    recycler_silo: Silo<SiloIdData>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct SiloIdData {
     id: u64,
 }
+impl SiloIdData {
+    pub fn new( id: u64 ) -> SiloIdData {
+        SiloIdData {
+            id
+        }
+    }    
+}
+
+
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct SiloByteData {
@@ -42,8 +51,8 @@ impl SiloByteData {
         }
     }    
 }
-/*
-impl RecycleSilo<'_> {
+
+impl RecycleSilo {
     pub fn open( 
         silo_dir: String, 
         record_size: u64,
@@ -61,9 +70,54 @@ impl RecycleSilo<'_> {
 	} )
     }
 
-    
+    pub fn push(&mut self, record: &[u8]) -> u64 {
+        match self.recycler_silo.pop() {
+            Some(data) => {
+                self.data_silo.put_record( data.id, &SiloByteData::new( record ));
+                data.id
+            },
+            None => self.data_silo.push( &SiloByteData::new( record )),
+        }
+    }
+
+    pub fn put_record(&mut self, id: u64, record: &[u8]) -> u64 {
+        match self.recycler_silo.pop() {
+            Some(data) => {
+                self.data_silo.put_record( data.id, &SiloByteData::new( record ));
+                data.id
+            },
+            None => {
+                let new_idx = self.data_silo.push( &SiloByteData::new( record ));
+                let _ = self.recycler_silo.push( &SiloIdData::new( id ));
+                new_idx
+            }
+        }
+        
+    }
+
+    pub fn get_record(&mut self, idx: u64) -> Option<Vec<u8>> {
+        match self.data_silo.get_record( idx ) {
+            Some(data) => Some(data.bytes.to_vec()),
+            None => None
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<Vec<u8>> {
+        match self.data_silo.pop() {
+            Some(data) => Some(data.bytes.to_vec()),
+            None => None
+        }
+    }
+
+    pub fn peek(&mut self) -> Option<Vec<u8>> {
+        match self.data_silo.peek() {
+            Some(data) => Some(data.bytes.to_vec()),
+            None => None
+        }
+    }
+
 }
-*/
+
 
 
 impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
@@ -316,11 +370,14 @@ mod tests {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    //use std::io::Result;
-    //use std::error::Error;
 
     #[test]
-    fn it_works() {
+    fn recycler_silo() {
+        
+    }
+
+    #[test]
+    fn plain_silo() {
         let record_size = 64*2;
         let max_file_size = 3 * record_size; // 3 records per file
         let testdir = TempDir::new().expect("coult not open testdir");
