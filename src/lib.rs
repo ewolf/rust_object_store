@@ -1,25 +1,27 @@
 //pub mod record_store;
 
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use serde::{Serialize, Deserialize,de::DeserializeOwned};
 use std::fs;
 use std::fs::{OpenOptions,File};
 use std::vec::Vec;
 use std::path::Path;
-use std::io::{Read, Seek, SeekFrom, /*Error,*/ Write} ;
+use std::io::{Read, Seek, SeekFrom, /*Error,*/ Write};
+use std::marker::PhantomData;
 
 //const MIN_FILE_SIZE : u64 = 4_096;
 
-pub struct Silo {
+pub struct Silo<T: Serialize + for<'de> Deserialize<'de>> {
     current_count: u64,
     record_size: u64,
     silo_dir: String,
     records_per_subsilo: u64,
     subsilos: Vec<File>,
+    _silo_type: PhantomData<T>,
 }
 
 pub struct RecycleSilo {
-    data_silo: Silo,
-    recycler_silo: Silo,
+    data_silo: Silo<SiloIdData>,
+    recycler_silo: Silo<SiloByteData>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -32,7 +34,7 @@ struct SiloByteData {
     data_length: usize,
     bytes: Vec<u8>,
 }
-impl<'a> SiloByteData {
+impl SiloByteData {
     pub fn new( data: &[u8] ) -> SiloByteData {
         SiloByteData {
             data_length: data.len(),
@@ -40,8 +42,8 @@ impl<'a> SiloByteData {
         }
     }    
 }
-
-impl RecycleSilo {
+/*
+impl RecycleSilo<'_> {
     pub fn open( 
         silo_dir: String, 
         record_size: u64,
@@ -61,14 +63,15 @@ impl RecycleSilo {
 
     
 }
+*/
 
 
-impl Silo {
+impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
 
     pub fn open( 
         silo_dir: String, 
         record_size: u64,
-        max_file_size: u64 ) -> Result<Silo, std::io::Error> 
+        max_file_size: u64 ) -> Result<Silo<T>, std::io::Error> 
     {
         //
         // open up the subsilo files and tally their sizes
@@ -105,6 +108,7 @@ impl Silo {
             record_size,
             records_per_subsilo: max_file_size / record_size,
             subsilos,
+            _silo_type: PhantomData,
         } )
     }
 
@@ -124,7 +128,7 @@ impl Silo {
     }
 
 
-    pub fn push<T: Serialize>(&mut self, record: &T) -> u64 {
+    pub fn push(&mut self, record: &T) -> u64 {
 
         let new_id = self.current_count;
 
@@ -149,7 +153,7 @@ impl Silo {
         new_id
     }
 
-    pub fn put_record<T: Serialize>(&mut self, id: u64, record: &T) {
+    pub fn put_record(&mut self, id: u64, record: &T) {
         if id < self.current_count {
             let (subsilo_file,_idx_in_subsilo) = self.subsilo_file_for_idx(id);
             let encoded: Vec<u8> = bincode::serialize(record).expect("Serialization failed");
@@ -160,7 +164,7 @@ impl Silo {
         }
     }
 
-    pub fn get_record<T: DeserializeOwned>(&mut self, idx: u64) -> Option<T> {
+    pub fn get_record(&mut self, idx: u64) -> Option<T> {
         if idx >= self.current_count {
             return None;
         }
@@ -173,7 +177,7 @@ impl Silo {
         Some(data)
     }
 
-    pub fn pop<T: DeserializeOwned>(&mut self) -> Option<T> {
+    pub fn pop(&mut self) -> Option<T> {
         let cc = self.current_count;
         eprintln!("pop start, current count  {cc}");
         if self.current_count == 0 {
@@ -197,7 +201,7 @@ impl Silo {
         Some(data)
     }
 
-    pub fn peek<T: DeserializeOwned>(&mut self) -> Option<T> {
+    pub fn peek(&mut self) -> Option<T> {
         let cc = self.current_count;
         eprintln!("peek start, current count  {cc}");
         if self.current_count == 0 {
@@ -322,7 +326,7 @@ mod tests {
         let testdir = TempDir::new().expect("coult not open testdir");
         let testdir_path = testdir.path().to_string_lossy().to_string();
         eprintln!( "Open {testdir_path}" );
-        let mut silo = Silo::open( testdir_path.clone(), record_size, max_file_size )
+        let mut silo = Silo::<SiloByteData>::open( testdir_path.clone(), record_size, max_file_size )
             .expect("could not open silo");
 
         let rs = silo.record_size;
@@ -332,11 +336,11 @@ mod tests {
         assert_eq!(silo.silo_dir, testdir_path);
         assert_eq!(silo.subsilos.len(), 1);
 
-        match silo.get_record::<SiloByteData>(2) {
+        match silo.get_record(2) {
             Some(_silo_bytes) => panic!("get record returns bytes when it should not"),
             None => assert_eq!(1, 1),
         }
-        match silo.get_record::<SiloByteData>(0) {
+        match silo.get_record(0) {
             Some(_silo_bytes) => panic!("get record returns bytes when it should not"),
             None => assert_eq!(1, 1),
         }
@@ -354,12 +358,12 @@ mod tests {
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
-        match silo.get_record::<SiloByteData>(0) {
+        match silo.get_record(0) {
             Some(silo_bytes) => assert_eq!( silo_bytes, my_bytes ) ,
             None => panic!("get record returns nothing")
         }
 
-        match silo.peek::<SiloByteData>() {
+        match silo.peek() {
             Some(silo_bytes) => assert_eq!( silo_bytes, my_bytes ),
             None => panic!("peek returns nothing")
         }
@@ -376,23 +380,23 @@ mod tests {
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
-        match silo.get_record::<SiloByteData>(0) {
+        match silo.get_record(0) {
             Some(silo_bytes) => assert_eq!( silo_bytes, my_bytes ),
             None => panic!("get record returns nothing")
         }
-        match silo.get_record::<SiloByteData>(1) {
+        match silo.get_record(1) {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("get record returns nothing")
         }
-        match silo.get_record::<SiloByteData>(2) {
+        match silo.get_record(2) {
             Some(_silo_bytes) => panic!("get record returns bytes when it should not"),
             None => assert_eq!(1, 1)
         }
-        match silo.peek::<SiloByteData>() {
+        match silo.peek() {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("peek returns nothing")
         }
-        match silo.pop::<SiloByteData>() {
+        match silo.pop() {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("pop returns nothing")
         }
@@ -402,7 +406,7 @@ mod tests {
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
-        match silo.pop::<SiloByteData>() {
+        match silo.pop() {
             Some(silo_bytes) => assert_eq!( silo_bytes, my_bytes ),
             None => panic!("pop doesnt returns nothing"),
         }
@@ -412,11 +416,11 @@ mod tests {
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
-        match silo.peek::<SiloByteData>() {
+        match silo.peek() {
             Some(_silo_bytes) => panic!("should be nothing to peek at"),
             None => assert_eq!( 0, 0 ),
         }
-        match silo.pop::<SiloByteData>() {
+        match silo.pop() {
             Some(_silo_bytes) => panic!("pop doesnt returns nothing"),
             None => assert_eq!( 0, 0 ),
         }
@@ -440,18 +444,18 @@ mod tests {
         assert_eq!(silo.current_count, 4);
         assert_eq!(silo.subsilos.len(), 2);
 
-        match silo.get_record::<SiloByteData>(2) {
+        match silo.get_record(2) {
             Some(silo_bytes) => assert_eq!( silo_bytes, my_bytes ),
             None => panic!("get record returns nothing")
         }
 
-        match silo.get_record::<SiloByteData>(3) {
+        match silo.get_record(3) {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("get record returns nothing")
         }
 
 	silo.put_record( 2, &more_bytes );
-        match silo.get_record::<SiloByteData>(2) {
+        match silo.get_record(2) {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("get record returns nothing")
         }
@@ -459,4 +463,3 @@ mod tests {
 	
     }
 }
-
