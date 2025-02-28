@@ -1,0 +1,133 @@
+mod util;
+pub mod silo;
+
+use silo::Silo;
+
+//use named_lock::NamedLock;
+//use named_lock::NamedLockGuard;
+//use named_lock::Error;
+//use named_lock::Result;
+
+use std::fs;
+use std::vec::Vec;
+
+
+
+/*
+   So, a silo idx maps to a certain record size.
+   with the following constants, the first silo 
+would be 1 and map to records of size 4_096 * 4
+   the second would be 2 and map to size 4_096 * 4 * 2
+ */
+const RECORD_QUANTA : u64 = 4_096; // records must be multiples of this
+const QUANTA_BOOST  : u64 = 4;      // how many record quanta to jump between silos
+
+const MAX_FILE_SIZE : u64 = 2_000_000_000;
+
+/*
+ * takes a silo id and returns how big that silo is.
+ */
+fn size_for_silo_id(silo_id: u64) -> u64 {
+    RECORD_QUANTA * QUANTA_BOOST * silo_id
+}
+
+/*
+ * takes a data size, a header size and a min silo id and gives the silo id that would assigned.
+ */
+
+fn silo_id_for_size(data_write_size: u64,  header_size: u64, min_silo_id: u64) -> u64 {
+    let write_size = header_size + data_write_size;
+    
+    let mut silo_id = write_size / (RECORD_QUANTA*QUANTA_BOOST);
+
+    if size_for_silo_id(silo_id) < write_size {
+        silo_id = silo_id + 1;
+    }
+    if silo_id < min_silo_id {
+        silo_id = min_silo_id;
+    }
+    silo_id
+}
+
+pub struct RecordStore {
+    base_dir: String,
+    silo_dir: String,
+    silos: Vec<Silo>,
+}
+
+
+impl RecordStore {
+
+    pub fn open(base_dir: &str) -> Result<RecordStore, util::RecordStoreError> {
+
+        let _ = util::ensure_path(&base_dir.to_string());
+
+        let silo_dir = [ base_dir, "data_silos" ].join("/");
+
+        let _ = util::ensure_path(&silo_dir);
+let _ = load_silos_from_directory(&silo_dir);
+        let silos: Vec<Silo> = Vec::new();
+
+        Ok(RecordStore {
+            base_dir: base_dir.to_string(),
+            silo_dir,
+            silos,
+        })
+    }
+/*
+    pub fn lock() -> Result<NamedLockGuard, Error> {
+        let named_lock_guard = NamedLock::create("LOCK")?.lock()?;
+        Ok( named_lock_guard )
+    }
+
+    pub fn stow(_data: &[u8], _id: u64) {
+        
+    }
+
+    pub fn fetch(_id: u64) {
+//        let silo_id = size_for_silo_id( 
+    }
+
+    pub fn delete_record() {}
+    pub fn next_id() {}
+    pub fn first_id() {}
+    pub fn fetch_meta() {}
+    pub fn is_locked() {}
+    pub fn record_count() {}
+*/
+
+//    fn get_silo(_silo_id: u64) {}
+
+}
+/*
+struct DataSilo {
+    id: u32,
+    value: f64,
+}
+*/
+pub fn load_silos_from_directory(dir: &String) -> Result<Vec<Silo>, util::RecordStoreError> {
+    let mut entries: Vec<Silo> = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(filename) = path.file_name() {
+                match filename.to_str().unwrap_or("").parse::<String>() {
+                    Ok(parsed) => {
+                        match parsed.parse::<u64>() {
+                            Ok(idx) => {
+                                let _ = silo_id_for_size( 64, 8, 1 );
+                                entries[idx as usize] = Silo::open(path.display().to_string(), 
+                                                                   size_for_silo_id(idx),
+                                                                   MAX_FILE_SIZE
+                                )?;
+                            }
+                            Err(_err) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(entries)
+}
