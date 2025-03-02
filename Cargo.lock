@@ -389,4 +389,5 @@ dependencies = [
  "serde",
  "serde_bytes",
  "tempfile",
+ "thiserror",
 ]
