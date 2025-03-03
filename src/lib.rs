@@ -3,6 +3,7 @@
 use serde::{Serialize, Deserialize};
 use std::fs;
 use std::fs::{OpenOptions,File};
+use std::mem;
 use std::vec::Vec;
 use std::path::Path;
 use std::io::{Read, Seek, SeekFrom, /*Error,*/ Write};
@@ -33,7 +34,36 @@ pub struct RecordStore {
     index_silo: Silo<RecordIndexData>,
 }
 
+const RECORD_QUANTA : u64 = 4_096; // records must be multiples of this
+const QUANTA_BOOST  : u64 = 4;      // how many record quanta to jump between silos
 const MAX_FILE_SIZE : u64 = 2_000_000_000;
+
+
+/*
+ * takes a silo id and returns how big that silo is.
+ */
+fn size_for_silo_idx(silo_idx: u64) -> u64 {
+    RECORD_QUANTA * QUANTA_BOOST * silo_idx
+}
+
+/*
+ * takes a data size, a header size and a min silo id and gives the silo id that would assigned.
+ */
+
+fn silo_idx_for_size(data_write_size: u64,  header_size: u64, min_silo_idx: u64) -> u64 {
+    let write_size = header_size + data_write_size;
+    
+    let mut silo_idx = write_size / (RECORD_QUANTA*QUANTA_BOOST);
+
+    if size_for_silo_idx(silo_idx) < write_size {
+        silo_idx = silo_idx + 1;
+    }
+    if silo_idx < min_silo_idx {
+        silo_idx = min_silo_idx;
+    }
+    silo_idx
+}
+
 
 impl RecordStore {
 /*
@@ -41,11 +71,19 @@ impl RecordStore {
 	let data_silo_dir = [silo_dir.clone(),"data_silos".to_string()].join("/");
         let index_silo_dir = [silo_dir.clone(),"data_index".to_string()].join("/");
         let index_silo = Silo::open( index_silo_dir, 
-                                     
+                                     mem::size_of::<RecordIndexData>().try_into().unwrap(),
                                      MAX_FILE_SIZE );
     }
+    pub fn push(&mut self, data: &[u8] ) -> Result<u64,RecordStoreError> {
+        // make a 
+    }
+    pub fn fetch(&mut self, idx: u64) -> Option<Vec<u8>> {
+        
+    }
+    pub fn stow(&mut self, idx: u64) -> Option<Vec<u8>> {
+        
+    }
 */
-
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -123,7 +161,6 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         //
         let _ = ensure_path( &silo_dir );
 
-
         //
         // load subsilo files and make sure there is at least one silo file
         //
@@ -145,6 +182,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         for file in &subsilos {
             silo_size_big += file.metadata()?.len();
         }
+
         let silo_size: u64 = silo_size_big as u64;
         let current_count = silo_size / record_size;
         Ok( Silo {
@@ -300,7 +338,7 @@ impl RecycleSilo {
 				     record_size,
 				     max_file_size )?;
 	let recycler_silo = Silo::open( [silo_dir.clone(),"recycle".to_string()].join("/"),
-					 record_size,
+					 mem::size_of::<SiloIdData>().try_into().unwrap(),
 					 max_file_size )?;
 	Ok( RecycleSilo {
 	    data_silo,
