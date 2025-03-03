@@ -13,13 +13,19 @@ use thiserror::Error;
 #[derive(Debug,Error)]
 pub enum RecordStoreError {
     #[error("An IO error occurred: {0}")]
-    IoError(String),
+    IoError(std::io::Error),
     #[error("A silo error occurred: {0}")]
     Silo(String),
     #[error("A record store error occurred: {0}")]
     RecordStore(String),
 //    #[error("An unknown error occurred")]
 //    Unknown,
+}
+
+impl From<std::io::Error> for RecordStoreError {
+    fn from(error: std::io::Error) -> Self {
+        RecordStoreError::IoError(error)
+    }
 }
 
 
@@ -68,7 +74,7 @@ pub struct RecordStore {
 
 
 impl RecordStore {
-    pub fn open(base_dir: &str) -> Result<RecordStore, std::io::Error> {
+    pub fn open(base_dir: &str) -> Result<RecordStore, RecordStoreError> {
 	let data_silo_dir = [base_dir,"data_silos"].join("/");
         let index_silo_dir = [base_dir,"data_index"].join("/");
         let index_silo = Silo::open( index_silo_dir,
@@ -95,7 +101,9 @@ impl RecordStore {
 
         self.index_silo.push
     }
+*/
 
+/*
     fn new_data_silo(&mut self, silo_id: usize) -> Result<&RecycleSilo, RecordStoreError> {
         let silo = RecycleSilo::open( self.data_silo_dir,
                                       size_for_silo_id(silo_id),
@@ -118,6 +126,7 @@ impl RecordStore {
         }
     }
 */
+
 /*
     pub fn fetch(&mut self, idx: usize) -> Option<Vec<u8>> {
 
@@ -200,7 +209,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
     pub fn open(
         silo_dir: String,
         record_size: usize,
-        max_file_size: usize ) -> Result<Silo<T>, std::io::Error>
+        max_file_size: usize ) -> Result<Silo<T>, RecordStoreError>
     {
         //
         // open up the subsilo files and tally their sizes
@@ -287,7 +296,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
             let (subsilo_file,_idx_in_subsilo) = self.subsilo_file_for_idx(id);
             let encoded: Vec<u8> = bincode::serialize(record).expect("Serialization failed");
             match subsilo_file.write_all(&encoded) {
-                Err(err) => Err(RecordStoreError::IoError(format!("put_record: could not write record {}", err))),
+                Err(err) => Err(RecordStoreError::IoError(err)),
                 Ok(()) => Ok(()),
             }
         } else {
@@ -350,7 +359,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         Some(data)
     }
 
-    fn subsilo(&mut self,idx: usize) -> Result<&mut File, std::io::Error> {
+    fn subsilo(&mut self,idx: usize) -> Result<&mut File, RecordStoreError> {
         let mut len = self.subsilos.len() as usize;
         while len <= idx {
             self.subsilos.push(OpenOptions::new()
@@ -378,7 +387,7 @@ impl RecycleSilo {
     pub fn open(
         silo_dir: String,
         record_size: usize,
-        max_file_size: usize ) -> Result<RecycleSilo, std::io::Error>
+        max_file_size: usize ) -> Result<RecycleSilo, RecordStoreError>
     {
 	let data_silo = Silo::open( [silo_dir.clone(),"data".to_string()].join("/"),
 				     record_size,
@@ -456,7 +465,7 @@ impl RecycleSilo {
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 
-pub fn silo_files_in_directory(dir: &String) -> Result<Vec<File>, std::io::Error> {
+pub fn silo_files_in_directory(dir: &String) -> Result<Vec<File>, RecordStoreError> {
     //
     // put numeric directory entries in a vec
     //
@@ -495,7 +504,7 @@ pub fn silo_files_in_directory(dir: &String) -> Result<Vec<File>, std::io::Error
     Ok( silo_files )
 }
 
-pub fn ensure_path(dir: &String) -> Result<(), std::io::Error> {
+pub fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
     if ! Path::new(&dir).exists() {
         fs::create_dir(dir)?;
     }
