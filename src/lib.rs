@@ -65,77 +65,114 @@ fn silo_id_for_size(data_write_size: usize) -> usize {
     silo_id
 }
 
+/*
+struct SiloHolder {
+    has_silo: bool,
+    silo_opt: Option<RecycleSilo>,
+}
+impl SiloHolder {
+    fn update(& mut self, silo: RecycleSilo) {
+        self.silo_opt = Some(silo);
+        self.has_silo = true;
+    }
+}
+*/
+
 pub struct RecordStore {
-    base_dir: String,
-    data_silo_dir: String,
-    data_silos: Vec<Option<RecycleSilo>>,
+    data_silos: Vec<RecycleSilo>,
     index_silo: Silo<RecordIndexData>,
 }
 
 
 impl RecordStore {
-    pub fn open(base_dir: &str) -> Result<RecordStore, RecordStoreError> {
-	let data_silo_dir = [base_dir,"data_silos"].join("/");
-        let index_silo_dir = [base_dir,"data_index"].join("/");
-        let index_silo = Silo::open( index_silo_dir,
+
+    pub fn new(base_dir: &str) -> RecordStore {
+        let mut data_silos: Vec<RecycleSilo> = Vec::new();
+        let mut silo_id = 0;
+        data_silos.resize_with(MAX_SILO_ID as usize + 1,
+                               move || {
+                                   silo_id += 1;
+                                   RecycleSilo::new( [base_dir,"data_silos",&silo_id.to_string()].join("/"),
+                                                      size_for_silo_id(silo_id),
+                                                      MAX_FILE_SIZE
+                                   )
+                               });
+        let index_silo = Silo::new( [base_dir,"data_index"].join("/"), 
                                      mem::size_of::<RecordIndexData>().try_into().unwrap(),
-                                     MAX_FILE_SIZE )?;
-
-        let mut data_silos: Vec<Option<RecycleSilo>> = Vec::new();
-        data_silos.resize_with(MAX_SILO_ID as usize + 1, || None);
-
-        Ok (RecordStore {
-            base_dir: base_dir.to_string(),
-            data_silo_dir,
-            data_silos,
+                                     MAX_FILE_SIZE );
+        RecordStore {
+            data_silos: Vec::new(),
             index_silo,
-        })
+        }
     }
-/*
+
     pub fn push(&mut self, data: &[u8] ) -> Result<usize,RecordStoreError> {
+
+        let _ = self.index_silo.open();
+
+        let data_id = self.index_silo.current_count;
+
         let record = SiloByteData::new( &data );
-        let silo_id = silo_id_for_size( record.size() );
 
-        let data_silo = self.get_data_silo( silo_id )?;
+        let silo_idx = silo_id_for_size( record.size() );
 
+        match self.data_silos.get_mut(silo_idx) {
+            None => Err(RecordStoreError::RecordStore("get_data_silo: calculated silo id {silo_idx} and max is {MAX_SILO_ID}".to_string())),
+            Some(data_silo) => {
+                let idx_in_silo = data_silo.push( &record )?;
+                
+                let index_data = RecordIndexData::new( silo_idx, idx_in_silo );
+                
+                let _ = self.index_silo.push( &index_data );
 
-        self.index_silo.push
-    }
-*/
-
-/*
-    fn new_data_silo(&mut self, silo_id: usize) -> Result<&RecycleSilo, RecordStoreError> {
-        let silo = RecycleSilo::open( self.data_silo_dir,
-                                      size_for_silo_id(silo_id),
-                                      MAX_FILE_SIZE )?;
-        self.data_silos[silo_id as usize] = silo;
-        Ok(&silo)
-    }
-    fn get_data_silo(&mut self, id: usize) -> Result<&RecycleSilo, RecordStoreError> {
-        if id > MAX_SILO_ID {
-            return Err(RecordStoreError::RecordStore("get_data_silo: requested id {id} when max is {MAX_SILO_ID}".to_string()));
-        }
-        match self.data_silos.get(id as usize) {
-            Some(opt) => {
-                match opt {
-                    Some(silo) => Ok(silo),
-                    None => Ok(self.new_data_silo(id)?)
-                }
+                Ok(data_id)        
             }
-            None => Ok(self.new_data_silo(id)?)
         }
     }
-*/
 
-/*
-    pub fn fetch(&mut self, idx: usize) -> Option<Vec<u8>> {
-
+    pub fn fetch(&mut self, id: usize) -> Result<Option<Vec<u8>>,RecordStoreError> {
+        let _ = self.index_silo.open();
+        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string())).unwrap();
+        let silo_idx = index_record.silo_idx;
+        let idx_in_silo = index_record.idx_in_silo;
+        if let Some(data_silo) = self.data_silos.get_mut(silo_idx) {
+            return Ok( data_silo.fetch_record(idx_in_silo) )
+        } else {
+            return Err(RecordStoreError::RecordStore("fetch: unable to find silo for index {silo_idx}".to_string()));
+        }        
     }
-    pub fn stow(&mut self, idx: usize) -> Option<Vec<u8>> {
 
+    pub fn stow(&mut self, id: usize, data: &[u8]) -> Result<(),RecordStoreError> {
+        let _ = self.index_silo.open();
+
+        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string())).unwrap();
+
+        let old_silo_idx = index_record.silo_idx;
+        let old_idx_in_silo = index_record.idx_in_silo;
+
+        let record = SiloByteData::new( &data );
+        let new_silo_idx = silo_id_for_size( record.size() );
+
+        if let Some(new_data_silo) = self.data_silos.get_mut(new_silo_idx) {
+            let _ = new_data_silo.open();
+            let new_idx_in_silo = new_data_silo.push(&record)?;
+            let index_data = RecordIndexData::new( new_silo_idx, new_idx_in_silo );
+            self.index_silo.put_record( id, &index_data )?;
+        } else {
+            return Err(RecordStoreError::RecordStore("stow: unable to find silo for index {new_silo_idx}".to_string()));
+        }
+
+        if let Some(old_data_silo) = self.data_silos.get_mut(old_silo_idx) {
+            let _ = old_data_silo.open();
+            old_data_silo.recycle(old_idx_in_silo)?;
+        } else {
+            return Err(RecordStoreError::RecordStore("stow: unable to find silo for index {old_silo_idx}".to_string()));
+        }
+
+        Ok(())
     }
-*/
 }
+
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
@@ -201,53 +238,100 @@ pub struct Silo<T: Serialize + for<'de> Deserialize<'de>> {
     silo_dir: String,
     records_per_subsilo: usize,
     subsilos: Vec<File>,
+    is_open: bool,
     _silo_type: PhantomData<T>,
 }
 
 impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
-
-    pub fn open(
-        silo_dir: String,
-        record_size: usize,
-        max_file_size: usize ) -> Result<Silo<T>, RecordStoreError>
+    
+    pub fn new( silo_dir: String,
+                record_size: usize,
+                max_file_size: usize ) -> Silo<T>
     {
+        Silo {
+            current_count: 0,
+            silo_dir,
+            record_size,
+            records_per_subsilo: max_file_size / record_size,
+            subsilos: Vec::new(),
+            is_open: false,
+            _silo_type: PhantomData,
+        }
+    }
+
+    pub fn open( &mut self ) -> Result<(), RecordStoreError>
+    {
+        if self.is_open {
+            return Ok(())   
+        }
+
         //
-        // open up the subsilo files and tally their sizes
+        // open up the subsilo files, filtering by numeric filenames
         //
-        let _ = ensure_path( &silo_dir );
+        let _ = ensure_path( &self.silo_dir );
+
+        let mut dir_entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&self.silo_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.file_name()
+                    .to_str()
+                    .and_then(|name| name.parse::<u32>().ok())
+                    .is_some()
+            })
+            .collect();
+
+        //
+        // sort the dir entries numerically.
+        //
+        dir_entries.sort_by_key(|entry| {
+            entry.file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
+
+        //
+        // add each entry into the subsilo entries
+        // note: this ignores the case where there are 
+        // gaps in the numbers
+        //
+        for entry in &dir_entries {
+            self.subsilos.push( OpenOptions::new()
+                                .read(true)
+                                .write(true)
+                                .create(true)
+                                .open(entry.path())?
+            );
+        }
+        
+
 
         //
         // load subsilo files and make sure there is at least one silo file
         //
-        let mut subsilos = silo_files_in_directory(&silo_dir)?;
-
-        if subsilos.len() == 0 {
+        if self.subsilos.len() == 0 {
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
-                .open( &[silo_dir.clone(),"0".to_string()].join("/") )?;
-            subsilos.insert( 0, file );
+                .open( &[self.silo_dir.clone(),"0".to_string()].join("/") )?;
+            self.subsilos.push( file );
         }
 
         //
         // count the number of records in the subsilos based on their size
         //
         let mut silo_size_big = 0;
-        for file in &subsilos {
+        for file in &self.subsilos {
             silo_size_big += file.metadata()?.len();
         }
 
         let silo_size: usize = silo_size_big as usize;
-        let current_count = silo_size / record_size;
-        Ok( Silo {
-            current_count,
-            silo_dir,
-            record_size,
-            records_per_subsilo: max_file_size / record_size,
-            subsilos,
-            _silo_type: PhantomData,
-        } )
+        self.current_count = silo_size / self.record_size;
+        
+        self.is_open = true;
+
+        Ok(())
     }
 
     //
@@ -362,6 +446,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
     fn subsilo(&mut self,idx: usize) -> Result<&mut File, RecordStoreError> {
         let mut len = self.subsilos.len() as usize;
         while len <= idx {
+            eprintln!("subsilo, {len} <= {idx}");
             self.subsilos.push(OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -384,21 +469,31 @@ pub struct RecycleSilo {
 }
 
 impl RecycleSilo {
-    pub fn open(
+    pub fn new(
         silo_dir: String,
         record_size: usize,
-        max_file_size: usize ) -> Result<RecycleSilo, RecordStoreError>
-    {
-	let data_silo = Silo::open( [silo_dir.clone(),"data".to_string()].join("/"),
-				     record_size,
-				     max_file_size )?;
-	let recycler_silo = Silo::open( [silo_dir.clone(),"recycle".to_string()].join("/"),
-					 mem::size_of::<SiloIdData>().try_into().unwrap(),
-					 max_file_size )?;
-	Ok( RecycleSilo {
+        max_file_size: usize ) -> RecycleSilo {
+	let data_silo = Silo::new( [silo_dir.clone(),"data".to_string()].join("/"),
+				    record_size,
+				    max_file_size );
+	let recycler_silo = Silo::new( [silo_dir.clone(),"recycle".to_string()].join("/"),
+					mem::size_of::<SiloIdData>().try_into().unwrap(),
+					max_file_size );
+        RecycleSilo {
 	    data_silo,
 	    recycler_silo,
-	} )
+	}
+    }
+    pub fn open(&mut self) -> Result<(), RecordStoreError>
+    {
+        let _ = self.data_silo.open();
+        let _ = self.recycler_silo.open();
+        Ok(())
+    }
+
+    pub fn recycle(&mut self, idx: usize) -> Result<(),RecordStoreError> {
+        self.recycler_silo.push( &SiloIdData::new( idx ))?;
+        Ok(())
     }
 
     pub fn live_records(&mut self) -> usize {
@@ -465,45 +560,6 @@ impl RecycleSilo {
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 
-pub fn silo_files_in_directory(dir: &String) -> Result<Vec<File>, RecordStoreError> {
-    //
-    // put numeric directory entries in a vec
-    //
-    let mut dir_entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.file_name()
-                .to_str()
-                .and_then(|name| name.parse::<u32>().ok())
-                .is_some()
-        })
-        .collect();
-
-    //
-    // sort the dir entries numerically
-    //
-    dir_entries.sort_by_key(|entry| {
-        entry.file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-            .unwrap_or(u32::MAX)
-    });
-
-    //
-    // create a vec of File based on those dir entries and "return" it
-    //
-    let mut silo_files: Vec<File> = Vec::new();
-    for entry in &dir_entries {
-        silo_files.push( OpenOptions::new()
-                         .read(true)
-                         .write(true)
-                         .create(true)
-                         .open(entry.path())?
-        );
-    }
-    Ok( silo_files )
-}
-
 pub fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
     if ! Path::new(&dir).exists() {
         fs::create_dir(dir)?;
@@ -527,8 +583,8 @@ mod tests {
         let testdir = TempDir::new().expect("coult not open testdir");
         let testdir_path = testdir.path().to_string_lossy().to_string();
         eprintln!( "Open {testdir_path}" );
-        let mut rsilo = RecycleSilo::open( testdir_path.clone(), record_size, max_file_size )
-            .expect("could not open recycle silo");
+        let mut rsilo = RecycleSilo::new( testdir_path.clone(), record_size, max_file_size );
+        rsilo.open().expect("could not open recycle silo");
 
         assert_eq!(rsilo.recycle_count(),0);
         assert_eq!(rsilo.data_count(),0);
@@ -578,8 +634,8 @@ mod tests {
         let data: [u8; 5] = [0xCA, 0xFE, 0xBA, 0xBE, 0xEE];
         let my_bytes = SiloByteData::new( &data );
 
-        let mut silo = Silo::<SiloByteData>::open( testdir_path.clone(), record_size, max_file_size )
-            .expect("could not open silo");
+        let mut silo = Silo::<SiloByteData>::new( testdir_path.clone(), record_size, max_file_size );
+        silo.open().expect("could not open silo");
 
         assert_eq!(silo.record_size, 128);
         assert_eq!(silo.current_count, 0);
@@ -602,7 +658,7 @@ mod tests {
 
         match silo.subsilos.get(0).unwrap().metadata() {
             Ok(subsilo_md) => {
-                assert_eq!( subsilo_md.len(), record_size );
+                assert_eq!( subsilo_md.len(), record_size.try_into().unwrap() );
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
@@ -622,7 +678,7 @@ mod tests {
         assert_eq!(silo.subsilos.len(), 1);
         match silo.subsilos.get(0).unwrap().metadata() {
             Ok(subsilo_md) => {
-                assert_eq!( subsilo_md.len(), record_size * 2 );
+                assert_eq!( subsilo_md.len(), (record_size * 2).try_into().unwrap() );
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
@@ -642,14 +698,15 @@ mod tests {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("peek returns nothing")
         }
-        let mut silo = Silo::<SiloByteData>::open( testdir_path.clone(), record_size, max_file_size )
-            .expect("could not open silo");
+
+        let mut silo = Silo::<SiloByteData>::new( testdir_path.clone(), record_size, max_file_size );
+        silo.open().expect("could not open silo");
 
         assert_eq!(silo.current_count, 2);
         assert_eq!(silo.subsilos.len(), 1);
         match silo.subsilos.get(0).unwrap().metadata() {
             Ok(subsilo_md) => {
-                assert_eq!( subsilo_md.len(), record_size * 2 );
+                assert_eq!( subsilo_md.len(), (record_size * 2).try_into().unwrap() );
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
@@ -676,7 +733,7 @@ mod tests {
         }
         match silo.subsilos.get(0).unwrap().metadata() {
             Ok(subsilo_md) => {
-                assert_eq!( subsilo_md.len(), record_size * 1 );
+                assert_eq!( subsilo_md.len(), (record_size * 1).try_into().unwrap() );
             },
             Err(err) => panic!("get record returns nothing {err}")
         }
