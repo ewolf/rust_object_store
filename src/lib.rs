@@ -571,6 +571,16 @@ mod tests {
         assert_eq!( new_id, 0 );
         let fetch_data = rs.fetch(0).ok().unwrap().unwrap();
         assert_eq!( fetch_data, data.to_vec() );
+
+        let new_data: [u8; 5] = [0xCA, 0xFE, 0xBA, 0xBE, 0xEE];
+
+        match rs.stow(0, &new_data) {
+            Err(err) => panic!("{}", err),
+            Ok(()) => assert_eq!( 1, 1 )
+        }
+
+        let fetch_data = rs.fetch(0).ok().unwrap().unwrap();
+        assert_eq!( fetch_data, new_data.to_vec() );
         
     }
 
