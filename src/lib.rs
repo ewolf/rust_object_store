@@ -1,4 +1,3 @@
-//pub mod record_store;
 
 use serde::{Serialize, Deserialize};
 use std::fs;
@@ -6,7 +5,7 @@ use std::fs::{OpenOptions,File};
 use std::mem;
 use std::vec::Vec;
 use std::path::Path;
-use std::io::{Read, Seek, SeekFrom, /*Error,*/ Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use thiserror::Error;
 
@@ -18,8 +17,6 @@ pub enum RecordStoreError {
     Silo(String),
     #[error("A record store error occurred: {0}")]
     RecordStore(String),
-//    #[error("An unknown error occurred")]
-//    Unknown,
 }
 
 impl From<std::io::Error> for RecordStoreError {
@@ -33,7 +30,7 @@ impl From<std::io::Error> for RecordStoreError {
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 
-const RECORD_QUANTA   : usize = 4_096; // records must be multiples of this
+const RECORD_QUANTA   : usize = 4_096;  // records must be multiples of this
 const QUANTA_BOOST    : usize = 4;      // how many record quanta to jump between silos
 const MAX_FILE_SIZE   : usize = 2_000_000_000;
 const MIN_SILO_ID     : usize = 2;
@@ -64,19 +61,6 @@ fn silo_id_for_size(data_write_size: usize) -> usize {
     }
     silo_id
 }
-
-/*
-struct SiloHolder {
-    has_silo: bool,
-    silo_opt: Option<RecycleSilo>,
-}
-impl SiloHolder {
-    fn update(& mut self, silo: RecycleSilo) {
-        self.silo_opt = Some(silo);
-        self.has_silo = true;
-    }
-}
-*/
 
 pub struct RecordStore {
     data_silos: Vec<RecycleSilo>,
@@ -132,7 +116,7 @@ impl RecordStore {
 
     pub fn fetch(&mut self, id: usize) -> Result<Option<Vec<u8>>,RecordStoreError> {
         let _ = self.index_silo.open();
-        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string())).unwrap();
+        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string()))?;
         let silo_idx = index_record.silo_idx;
         let idx_in_silo = index_record.idx_in_silo;
         if let Some(data_silo) = self.data_silos.get_mut(silo_idx) {
@@ -145,7 +129,7 @@ impl RecordStore {
     pub fn stow(&mut self, id: usize, data: &[u8]) -> Result<(),RecordStoreError> {
         let _ = self.index_silo.open();
 
-        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string())).unwrap();
+        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string()))?;
 
         let old_silo_idx = index_record.silo_idx;
         let old_idx_in_silo = index_record.idx_in_silo;
@@ -575,6 +559,25 @@ pub fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn record_store() {
+        let testdir = TempDir::new().expect("coult not open testdir");
+        let testdir_path = testdir.path().to_string_lossy().to_string();
+        let mut rs = RecordStore::new( &testdir_path );
+        match rs.fetch(0) {
+            Err(_err) => assert_eq!( 1, 1 ),
+            Ok(_record) => panic!("fetch returns something in empty rs")
+        }
+
+        let data: [u8; 5] = [0xCA, 0xFE, 0xBA, 0xBE, 0xEE];
+
+        match rs.stow(0, &data) {
+            Err(_err) => assert_eq!( 1, 1 ),
+            Ok(()) => panic!("fetch returns something in empty rs")
+        }
+        
+    }
 
     #[test]
     fn recycler_silo() {
