@@ -169,7 +169,7 @@ struct SiloIdData {
     id: usize,
 }
 impl SiloIdData {
-    pub fn new( id: usize ) -> SiloIdData {
+    fn new( id: usize ) -> SiloIdData {
          SiloIdData {
             id
         }
@@ -185,7 +185,7 @@ struct RecordIndexData {
     // add timestamp here?
 }
 impl RecordIndexData {
-    pub fn new( silo_idx: usize, idx_in_silo: usize ) -> RecordIndexData {
+    fn new( silo_idx: usize, idx_in_silo: usize ) -> RecordIndexData {
         RecordIndexData {
             silo_idx,
             idx_in_silo,
@@ -202,13 +202,13 @@ pub struct SiloByteData {
 }
 
 impl SiloByteData {
-    pub fn new( data: &[u8] ) -> SiloByteData {
+    fn new( data: &[u8] ) -> SiloByteData {
         SiloByteData {
             data_length: data.len(),
             bytes: data.to_vec(),
         }
     }
-    pub fn size(&self) -> usize {
+    fn size(&self) -> usize {
         (std::mem::size_of::<usize>() + self.bytes.len()).try_into().unwrap()
     }
 }
@@ -535,7 +535,7 @@ impl RecycleSilo {
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
 
-pub fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
+fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
     if ! Path::new(&dir).exists() {
         fs::create_dir_all(dir)?;
     }
