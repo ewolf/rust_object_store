@@ -103,6 +103,7 @@ impl RecordStore {
         match self.data_silos.get_mut(silo_idx) {
             None => Err(RecordStoreError::RecordStore("get_data_silo: calculated silo id {silo_idx} and max is {MAX_SILO_ID}".to_string())),
             Some(data_silo) => {
+                let _ = data_silo.open();
                 let idx_in_silo = data_silo.push( &record )?;
                 
                 let index_data = RecordIndexData::new( silo_idx, idx_in_silo );
@@ -120,6 +121,7 @@ impl RecordStore {
         let silo_idx = index_record.silo_idx;
         let idx_in_silo = index_record.idx_in_silo;
         if let Some(data_silo) = self.data_silos.get_mut(silo_idx) {
+            let _ = data_silo.open();
             return Ok( data_silo.fetch_record(idx_in_silo) )
         } else {
             return Err(RecordStoreError::RecordStore("fetch: unable to find silo for index {silo_idx}".to_string()));
@@ -419,12 +421,11 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         let mut len = self.subsilos.len() as usize;
         while len <= idx {
             let path = [self.silo_dir.clone(),len.to_string()].join("/");
-            let _ = ensure_path( &path )?;
             self.subsilos.push(OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
-                .open( &[path,len.to_string()].join("/") )?);
+                .open( &path )? );
             len = len + 1;
         }
         Ok(self.subsilos.get_mut(idx as usize).unwrap())
@@ -712,6 +713,7 @@ mod tests {
         }
 
         let mut silo = Silo::<SiloByteData>::new( testdir_path.clone(), record_size, max_file_size );
+
         silo.open().expect("could not open silo");
 
         assert_eq!(silo.current_count, 2);
@@ -811,6 +813,15 @@ mod tests {
             Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
             None => panic!("get record returns nothing")
         }
+
+        let mut silo = Silo::<SiloByteData>::new( testdir_path.clone(), record_size, max_file_size );
+        silo.open().expect("could not reopen silo");
+        
+        match silo.fetch_record(2) {
+            Some(silo_bytes) => assert_eq!( silo_bytes, more_bytes ),
+            None => panic!("get record returns nothing")
+        }
+        
 
     }
 }
