@@ -85,7 +85,7 @@ impl RecordStore {
                                      mem::size_of::<RecordIndexData>().try_into().unwrap(),
                                      MAX_FILE_SIZE );
         RecordStore {
-            data_silos: Vec::new(),
+            data_silos,
             index_silo,
         }
     }
@@ -327,9 +327,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         let idx_in_subsilo =  idx % self.records_per_subsilo;
         let seek_position = idx_in_subsilo*self.record_size;
         let subsilo_file = self.subsilo(subsilo_idx).expect("could not get subsilo file");
-        eprintln!("SEEK TO  {seek_position} for index {idx} in subsilo {subsilo_idx} position {idx_in_subsilo}");
         subsilo_file.seek(SeekFrom::Start(seek_position as u64)).expect("could not seek");
-        eprintln!("DONE SEEEK");
         (subsilo_file,idx_in_subsilo)
     }
 
@@ -351,10 +349,6 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         }
 
         self.current_count = 1 + self.current_count;
-
-        let cc = self.current_count;
-        eprintln!("push done, current count now {cc}");
-
 
         Ok(new_id)
     }
@@ -387,10 +381,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
     }
 
     pub fn pop(&mut self) -> Option<T> {
-        let cc = self.current_count;
-        eprintln!("pop start, current count  {cc}");
         if self.current_count == 0 {
-            eprintln!("pop return none");
             return None
         }
         let rs = self.record_size;
@@ -406,13 +397,10 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         subsilo_file.set_len(subsilo_space).expect("pop: could not set_len of subsilo");
 
         self.current_count = last_idx;
-        eprintln!("pop return buffer, current count now {last_idx}");
         Some(data)
     }
 
     pub fn peek(&mut self) -> Option<T> {
-        let cc = self.current_count;
-        eprintln!("peek start, current count  {cc}");
         if self.current_count == 0 {
             return None
         }
@@ -430,12 +418,13 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
     fn subsilo(&mut self,idx: usize) -> Result<&mut File, RecordStoreError> {
         let mut len = self.subsilos.len() as usize;
         while len <= idx {
-            eprintln!("subsilo, {len} <= {idx}");
+            let path = [self.silo_dir.clone(),len.to_string()].join("/");
+            let _ = ensure_path( &path )?;
             self.subsilos.push(OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
-                .open( &[self.silo_dir.clone(),len.to_string()].join("/") )?);
+                .open( &[path,len.to_string()].join("/") )?);
             len = len + 1;
         }
         Ok(self.subsilos.get_mut(idx as usize).unwrap())
@@ -457,6 +446,7 @@ impl RecycleSilo {
         silo_dir: String,
         record_size: usize,
         max_file_size: usize ) -> RecycleSilo {
+
 	let data_silo = Silo::new( [silo_dir.clone(),"data".to_string()].join("/"),
 				    record_size,
 				    max_file_size );
@@ -546,7 +536,7 @@ impl RecycleSilo {
 
 pub fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
     if ! Path::new(&dir).exists() {
-        fs::create_dir(dir)?;
+        fs::create_dir_all(dir)?;
     }
     Ok(())
 }
@@ -576,6 +566,11 @@ mod tests {
             Err(_err) => assert_eq!( 1, 1 ),
             Ok(()) => panic!("fetch returns something in empty rs")
         }
+
+        let new_id = rs.push( &data ).unwrap();
+        assert_eq!( new_id, 0 );
+        let fetch_data = rs.fetch(0).ok().unwrap().unwrap();
+        assert_eq!( fetch_data, data.to_vec() );
         
     }
 
@@ -585,7 +580,6 @@ mod tests {
         let max_file_size = 3 * record_size; // 3 records per file
         let testdir = TempDir::new().expect("coult not open testdir");
         let testdir_path = testdir.path().to_string_lossy().to_string();
-        eprintln!( "Open {testdir_path}" );
         let mut rsilo = RecycleSilo::new( testdir_path.clone(), record_size, max_file_size );
         rsilo.open().expect("could not open recycle silo");
 
@@ -613,6 +607,9 @@ mod tests {
         assert_eq!(rsilo.data_count(),1);
         assert_eq!(rsilo.live_records(),1);
 
+        let fetched_record = rsilo.fetch_record( 0 ).unwrap();
+        assert_eq!(fetched_record, data.to_vec() );
+
 
         let data: [u8; 6] = [0x01, 0x01, 0x02, 0x03, 0x05, 0x06];
         let record = SiloByteData::new( &data );
@@ -621,6 +618,9 @@ mod tests {
         assert_eq!(rsilo.recycle_count(),1);
         assert_eq!(rsilo.data_count(),2);
         assert_eq!(rsilo.live_records(),1);
+
+        let fetched_record = rsilo.fetch_record( 1 ).unwrap();
+        assert_eq!(fetched_record, data.to_vec() );
     }
 
     #[test]
@@ -629,7 +629,6 @@ mod tests {
         let max_file_size = 3 * record_size; // 3 records per file
         let testdir = TempDir::new().expect("coult not open testdir");
         let testdir_path = testdir.path().to_string_lossy().to_string();
-        eprintln!( "Open {testdir_path}" );
 
         let data: [u8; 6] = [0x01, 0x01, 0x02, 0x03, 0x05, 0x06];
         let more_bytes = SiloByteData::new(&data);
