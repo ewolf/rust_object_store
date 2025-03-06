@@ -245,6 +245,12 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
 
 }
 
+fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
+    if ! Path::new(&dir).exists() {
+        fs::create_dir_all(dir)?;
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -442,11 +448,4 @@ mod tests {
         
 
     }
-}
-
-fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
-    if ! Path::new(&dir).exists() {
-        fs::create_dir_all(dir)?;
-    }
-    Ok(())
 }

@@ -75,7 +75,7 @@ impl RecordStore {
                                                       MAX_FILE_SIZE
                                    )
                                });
-        let index_silo = Silo::new( [base_dir,"data_index"].join("/"), 
+        let index_silo = Silo::new( [base_dir,"data_index"].join("/"),
                                      mem::size_of::<RecordIndexData>().try_into().unwrap(),
                                      MAX_FILE_SIZE );
         RecordStore {
@@ -84,29 +84,15 @@ impl RecordStore {
         }
     }
 
-    pub fn push(&mut self, data: &[u8] ) -> Result<usize,RecordStoreError> {
-
+    pub fn next_id(&mut self) -> Result<usize,RecordStoreError> {
         let _ = self.index_silo.open();
 
         let data_id = self.index_silo.current_count;
 
-        let record = SiloByteData::new( &data );
+        let index_data = RecordIndexData::new( 0, 0 );
+        let _ = self.index_silo.push( &index_data )?;
 
-        let silo_idx = silo_id_for_size( record.size() );
-
-        match self.data_silos.get_mut(silo_idx) {
-            None => Err(RecordStoreError::RecordStore("get_data_silo: calculated silo id {silo_idx} and max is {MAX_SILO_ID}".to_string())),
-            Some(data_silo) => {
-                let _ = data_silo.open();
-                let idx_in_silo = data_silo.push( &record )?;
-                
-                let index_data = RecordIndexData::new( silo_idx, idx_in_silo );
-                
-                let _ = self.index_silo.push( &index_data );
-
-                Ok(data_id)        
-            }
-        }
+        Ok( data_id )
     }
 
     pub fn fetch(&mut self, id: usize) -> Result<Option<Vec<u8>>,RecordStoreError> {
@@ -119,7 +105,7 @@ impl RecordStore {
             return Ok( data_silo.fetch_record(idx_in_silo) )
         } else {
             return Err(RecordStoreError::RecordStore("fetch: unable to find silo for index {silo_idx}".to_string()));
-        }        
+        }
     }
 
     pub fn stow(&mut self, id: usize, data: &[u8]) -> Result<(),RecordStoreError> {
@@ -176,8 +162,10 @@ mod tests {
             Ok(()) => panic!("fetch returns something in empty rs")
         }
 
-        let new_id = rs.push( &data ).unwrap();
+        let new_id = rs.next_id().unwrap();
         assert_eq!( new_id, 0 );
+
+        let _ = rs.stow( new_id, &data);
         let fetch_data = rs.fetch(0).ok().unwrap().unwrap();
         assert_eq!( fetch_data, data.to_vec() );
 
@@ -190,6 +178,6 @@ mod tests {
 
         let fetch_data = rs.fetch(0).ok().unwrap().unwrap();
         assert_eq!( fetch_data, new_data.to_vec() );
-        
+
     }
 }
