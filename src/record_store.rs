@@ -84,6 +84,10 @@ impl RecordStore {
         }
     }
 
+    pub fn current_count(&mut self) -> usize {
+        self.index_silo.current_count
+    }
+
     pub fn next_id(&mut self) -> Result<usize,RecordStoreError> {
         let _ = self.index_silo.open();
 

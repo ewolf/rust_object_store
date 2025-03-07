@@ -60,7 +60,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
     pub fn open( &mut self ) -> Result<(), RecordStoreError>
     {
         if self.is_open {
-            return Ok(())   
+            return Ok(())
         }
 
         //
