@@ -6,11 +6,18 @@ use bincode;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 struct Canary {
+    is_alive: bool,
     wingspan: u64,
 }
 
 impl ObjectType for Canary {
-    fn name(&self) -> String { String::from("canary") }
+        fn new() -> Box<Canary> {
+            Box::new(Canary { is_alive: true, wingspan: 3 })
+        }
+        fn load(bytes: &[u8]) -> Box<Canary> {
+            let canary: Canary = bincode::deserialize(bytes).expect("canary load failed");
+            Box::new( canary )
+        }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -18,7 +25,13 @@ struct CoalMine {
     tons: usize,
 }
 impl ObjectType for CoalMine {
-    fn name(&self) -> String { String::from("CoalMine") }
+    fn new() -> Box<CoalMine> {
+        Box::new(CoalMine { tons: 0 })
+    }
+    fn load(bytes: &[u8]) -> Box<CoalMine> {
+        let coalmine: CoalMine = bincode::deserialize(bytes).expect("coalmine load failed");
+        Box::new( coalmine )
+    }
 }
 
 

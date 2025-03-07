@@ -1,81 +1,20 @@
 use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
-use erased_serde::{serialize_trait_object, Serialize as ErasedSerialize};
 use serde::{Serialize, Deserialize};
 use bincode;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-type FactoryNew = fn() -> Box<Obj<dyn ObjectType>>;
-type FactoryDeserialize = fn(&[u8]) -> Box<Obj<dyn ObjectType>>;
-pub struct TypeRegistry {
-    new_map: HashMap<String, FactoryNew>,
-    deserialize_map: HashMap<String, FactoryDeserialize>,
-}
-impl TypeRegistry {
-    fn new() -> TypeRegistry {
-        TypeRegistry {
-            new_map: HashMap::new(),
-            deserialize_map: HashMap::new(),
-        }
-    }
-    pub fn register(&mut self, 
-                    name: &str, 
-                    new_fn: FactoryNew,
-                    deserialize_fn: FactoryDeserialize) 
-                    -> Result<(),RecordStoreError> {
-        match self.new_map.get(name) {
-            None => {
-                self.new_map.insert( name.to_string(), new_fn );
-                self.deserialize_map.insert( name.to_string(), deserialize_fn );
-                Ok(())
-            },
-            Some(_fn) => Err(RecordStoreError::ObjectStore(String::from("Error. object type {name} already registered")))
-        }
-    }
-    fn new_obj(&mut self, name: &str) -> Result<Box<Obj<dyn ObjectType>>,RecordStoreError> {
-        match self.new_map.get(name) {
-            None => Err(RecordStoreError::ObjectStore(String::from("Error. object type {name} not found"))),
-            Some(new_fn) => Ok(new_fn())
-        }
-    }
-    fn deserialize_obj(&mut self, name: &str, bytes: &[u8]) -> Result<Box<Obj<dyn ObjectType>>,RecordStoreError> {
-        match self.deserialize_map.get(name) {
-            None => Err(RecordStoreError::ObjectStore(String::from("Error. object type {name} not found"))),
-            Some(d_fn) => Ok(d_fn(bytes))
-        }
-    }
+pub trait ObjectType: Serialize + for<'de> Deserialize<'de> {
+    fn new() -> Box<Self>;
+    fn load(bytes: &[u8]) -> Box<Self>;
 }
 
-
-pub trait ObjectType : ObjectTypeClone + ErasedSerialize {// +  + Deserialize {
-    fn name(&self) -> String;
-}
-
-// Implement serialization for the trait
-serialize_trait_object!(ObjectType);
-
-pub trait ObjectTypeClone {
-    fn clone_box(&self) -> Box<dyn ObjectType>;
-}
-
-impl<T: 'static + ObjectType + Clone>ObjectTypeClone for T {
-    fn clone_box(&self) -> Box<dyn ObjectType> {
-        Box::new(self.clone())
-    }
-}
-
-impl Clone for Box<dyn ObjectType> {
-    fn clone(&self) -> Box<dyn ObjectType> {
-        self.clone_box()
-    }
-}
-
-pub struct Obj<T: ObjectType + ?Sized> {
+pub struct Obj<T> {
     id: u64,
     saved: bool,
     dirty: bool,
-    data: Option<Box<T>>,
+    data: Box<T>,
     _object_type: PhantomData<T>,
 }
 
@@ -85,7 +24,16 @@ impl<T: ObjectType> Obj<T> {
             id: 0,
             saved: false,
             dirty: true,
-            data: None,
+            data: T::new(),
+            _object_type: PhantomData,
+        }
+    }
+    pub fn load(bytes: &[u8]) -> Obj<T> {
+        Obj {
+            id: 0,
+            saved: true,
+            dirty: false,
+            data: T::load(bytes),
             _object_type: PhantomData,
         }
     }
@@ -105,14 +53,10 @@ impl RegistryWrapper<'_> {
             bytes,
         }
     }
-//    fn deserialize() -> impl Fn(&[u8]) -> Result<Self, bincode::Error> {
-//        |bytes| bincode::deserialize(bytes)
-//    }
 }
 
 pub struct ObjectStore {
     record_store: RecordStore,
-    pub object_factory: TypeRegistry,
 }
 
 impl ObjectStore {
@@ -122,45 +66,27 @@ impl ObjectStore {
 
         ObjectStore {
             record_store,
-            object_factory: TypeRegistry::new(),
         }
     }
 
-    pub fn new_obj(&mut self, object_type_name: String) -> Result<Box<Obj<dyn ObjectType>>, RecordStoreError> {
-        Ok(self.object_factory.new_obj( &object_type_name )?)
+    pub fn new_obj<T: ObjectType>(&mut self) -> Box<Obj<T>> {
+        let new_obj = Obj::<T>::new();
+        //  register it here or whatnot
+        Box::new(new_obj)
     }
 
-    pub fn save_obj(&mut self,obj: &Obj<dyn ObjectType>) -> Result<(),RecordStoreError> {
-        match &obj.data {
-            Some(data) => {
-                let serialized_bytes = bincode::serialize(&data).unwrap();
-                let name = data.name();
-                let wrapper = RegistryWrapper::new( name, &serialized_bytes );
-                let serialized_bytes = bincode::serialize(&wrapper).unwrap();
-                self.record_store.stow( obj.id as usize, &serialized_bytes )?;
-                Ok(())
-            },
-            None => Err(RecordStoreError::ObjectStore(String::from("save_obj: no data found")))
-        }
+    pub fn save_obj<T: ObjectType>(&mut self,obj: &Obj<T>) -> Result<(),RecordStoreError> {
+        let data = &obj.data;
+        let serialized_bytes = bincode::serialize(&data).unwrap();
+        self.record_store.stow( obj.id as usize, &serialized_bytes )?;
+        Ok(())
     }
 
-    pub fn fetch(&mut self, id: usize) -> Result<Box<Obj<dyn ObjectType>>,RecordStoreError> {
-        let serialized_bytes = self.record_store.fetch( id )?.unwrap();
-        let wrapper: RegistryWrapper = bincode::deserialize(&serialized_bytes).unwrap();
-        Ok(self.object_factory.deserialize_obj( &wrapper.type_name, wrapper.bytes )?)
-/*
-        let obj_data = self.object_factory.deserialize_obj( &wrapper.type_name, wrapper.bytes )?;
-        let obj = Obj {
-            id: id as u64,
-            saved: true,
-            dirty: false,
-            data: Some(obj_data),
-            _object_type: PhantomData,
-        };
-        Ok(Box::new(obj))
-*/
+    pub fn fetch<T: ObjectType>(&mut self, id: usize) -> Result<Box<Obj<T>>,RecordStoreError> {
+        let bytes = self.record_store.fetch( id )?.unwrap();
+        let loaded_obj = Obj::<T>::load(&bytes);
+        Ok(Box::new(loaded_obj))
     }
-
 
 /*
     pub fn fetch_root(&mut self) {
@@ -184,11 +110,18 @@ mod tests {
 
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     struct Canary {
+        is_alive: bool,
         wingspan: u64,
     }
 
     impl ObjectType for Canary {
-        fn name(&self) -> String { String::from("canary") }
+        fn new() -> Box<Canary> {
+            Box::new(Canary { is_alive: true, wingspan: 3 })
+        }
+        fn load(bytes: &[u8]) -> Box<Canary> {
+            let canary: Canary = bincode::deserialize(bytes).expect("canary load failed");
+            Box::new( canary )
+        }
     }
 
 
@@ -198,6 +131,7 @@ mod tests {
         let testdir_path = testdir.path().to_string_lossy().to_string();
 
         let mut os = ObjectStore::new( &testdir_path );
+/*
         let _ = os.object_factory.register( "canary", 
                                              || { let obj:Obj<Canary> = Obj::new(); 
                                                   obj.data = Some(Canary {wingspan:0});
@@ -227,6 +161,6 @@ mod tests {
             }
             Err(_err) => panic!("canary died")
         }
-        
+         */        
     }
 }
