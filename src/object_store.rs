@@ -10,16 +10,16 @@ use std::any::Any;
 use bincode;
 
 // Trait for objects that can be stored dynamically
-trait ObjectType {
+pub trait ObjectType {
     fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
     fn to_bytes(&self) -> Vec<u8>;
 }
 
 // Separate trait for serialization/deserialization
-trait Serializable: Serialize + for<'de> Deserialize<'de> {}
+pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
 
 // Factory trait for creating objects dynamically
-trait ObjectTypeFactory {
+pub trait ObjectTypeFactory {
     fn name() -> String;
     fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType>;
 }

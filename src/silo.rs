@@ -8,7 +8,6 @@ use std::path::Path;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use thiserror::Error;
-use bincode::Error;
 
 
 // ----------------------------------------------------------------
