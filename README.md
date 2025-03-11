@@ -25,5 +25,19 @@ WHY IT DOES WHAT IT DOES:
 its easier to use a path to lookup.
 
 CURRENT STATUS:
-   
-   
+
+ Object store relies on data store to handle all the saving of objects. 
+
+ The data store is complete.
+
+ The data store
+
+    * supplies ids
+
+    * saves data for a supplied id
+
+    * fetches data for a supplied id
+
+  It uses fixed record indexing to look up which fixed record data silos to
+  use. Internal record store ids are recycled as needed to keep the stores from
+  growing uncontrolibly.
