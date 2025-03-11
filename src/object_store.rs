@@ -111,7 +111,6 @@ impl ObjectStore {
 
         Ok(Box::new(new_obj))
     }
-/*
 
     ///
     ///
@@ -123,9 +122,8 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn save_obj<T: ObjectType + ObjectTypeFactory + Serializable>(&mut self,obj: &Obj) -> Result<(),RecordStoreError> {
-        let data = &obj.data;
-        let serialized_bytes = bincode::serialize(&data).unwrap();
+    pub fn save_obj<T: ObjectType + ObjectTypeFactory>(&mut self,obj: &Obj) -> Result<(),RecordStoreError> {
+        let serialized_bytes = obj.to_bytes::<T>();
         let wrapper = SaveWrapper {
             name: &T::name(),
             bytes: &serialized_bytes,
@@ -148,15 +146,14 @@ impl ObjectStore {
     pub fn fetch<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, id: usize) -> Result<Box<Obj>, RecordStoreError> {
         let bytes = self.record_store.fetch( id )?.unwrap();
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
-        let boxed_type_obj = T::create_from_bytes(&bytes);
-        let obj = Obj {
-            id: id as u64,
-            dirty: false,
-            saved: true,
-            data: boxed_type_obj,
-        };
+        if wrapper.name != T::name() {
+            return Err(RecordStoreError::ObjectStore("Error, expected '{T::Name}' and fetched '{wrapper.name}".to_string()));
+        }
+        let obj = Obj::from_bytes::<T>(&wrapper.bytes);
         Ok(Box::new(obj))
     }
+
+/*
     ///
     ///
     /// # Arguments
