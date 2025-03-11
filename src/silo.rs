@@ -8,6 +8,7 @@ use std::path::Path;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use thiserror::Error;
+use bincode::Error;
 
 
 // ----------------------------------------------------------------
@@ -26,7 +27,16 @@ pub enum RecordStoreError {
     /// Problem in an object store
     #[error("An object store error occurred: {0}")]
     ObjectStore(String),
+    #[error("An binary operation error occurred: {0}")]
+    BinError(String)
 }
+
+impl From<bincode::Error> for RecordStoreError {
+    fn from(error: bincode::Error) -> Self {
+        RecordStoreError::BinError(error.to_string())
+    }
+}
+
 
 impl From<std::io::Error> for RecordStoreError {
     fn from(error: std::io::Error) -> Self {

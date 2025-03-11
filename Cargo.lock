@@ -419,9 +419,11 @@ dependencies = [
  "erased-serde",
  "lazy_static",
  "named-lock",
+ "quote",
  "serde",
  "serde_bytes",
  "serde_cbor",
+ "syn",
  "tempfile",
  "thiserror",
 ]

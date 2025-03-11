@@ -4,98 +4,63 @@
 //!
 use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
+
 use serde::{Serialize, Deserialize};
+use std::any::Any;
 use bincode;
 
-
-//use std::sync::{Arc, Mutex};
-//use std::collections::HashMap;
-//use lazy_static::lazy_static;
-/*
-lazy_static! {
-    static ref DIRTY_CACHE: Arc<Mutex<HashMap<u64, Box<dyn Fn() -> Vec<u8>>>> = Arc::new(Mutex::new(HashMap::new()));
+// Trait for objects that can be stored dynamically
+trait ObjectType {
+    fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
+    fn to_bytes(&self) -> Vec<u8>;
 }
 
-trait Saveable: Send + Sync {
-    
-}
-*/
+// Separate trait for serialization/deserialization
+trait Serializable: Serialize + for<'de> Deserialize<'de> {}
 
-//static DIRTY_CACHE: Arc<Mutex<HashMap<u64, Box<Obj<dyn Saveable>>>>> = Arc::new(Mutex::new(HashMap::new()));
-
-pub trait ObjectType: Serialize + for<'de> Deserialize<'de> {
-    fn new() -> Box<Self>;
-    fn load(bytes: &[u8]) -> Result<Box<Self>,RecordStoreError>;
-//    fn bytes() -> Vec<u8>;
+// Factory trait for creating objects dynamically
+trait ObjectTypeFactory {
     fn name() -> String;
+    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType>;
 }
 
-///
-/// An Obj manages data for a particular type and is connected to the store.
-/// 
-pub struct Obj<T> {
-    /// The id assigned by the ObjectStore.
+
+// Struct that stores a `Box<dyn ObjectType>`
+pub struct Obj {
     pub id: u64,
 
     saved: bool,   // true if this object has ever been saved to the data store
     dirty: bool,   // true if this object needs to be saved to the data store
-    data: Box<T>,  // object 
+
+    data: Box<dyn ObjectType>,
 }
 
-impl<T: ObjectType> Obj<T> {
-
-    ///
-    /// Returns a new empty object with 
-    /// default type data.
-    ///
-    pub fn new() -> Obj<T> {
-        Obj {
+impl Obj {
+    // Creates an Obj with any ObjectType implementation
+    fn new<T: ObjectType + ObjectTypeFactory + 'static>(data_obj: T) -> Self {
+        Obj { 
             id: 0,
             saved: false,
             dirty: true,
-            data: T::new(),
+            data: Box::new(data_obj),
         }
     }
 
-    ///
-    /// Mark the data in this object as needing a save.
-    ///
-    pub fn dirty(&self) {
-        //let DIRTY_CACHE: Arc<Mutex<HashMap<u64, Box<Obj<dyn Saveable>>>>> = Arc::new(Mutex::new(HashMap::new()));
-        //        let mut cache = DIRTY_CACHE.lock().unwrap();
-        //        cache.insert( self.id, Box::new(|| bincode::serialize(&self.data).unwrap().to_vec()) );
+    // Creates an Obj from bytes
+    fn from_bytes<T: ObjectType + ObjectTypeFactory + 'static>(bytes: &[u8]) -> Self {
+        Obj { id:0, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
     }
-    
-    /// Construct an object given an array of bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * bytes - an array of bytes.
-    ///
-    /// # Returns
-    ///
-    /// * Ok(Obj<T>) - the constructed object
-    /// * Err(RecordStoreError::ObjectStore) - the bytes indicate a different data type than the Obj's type.
-    ///
-    pub fn load(bytes: &[u8]) -> Result<Obj<T>,RecordStoreError> {
-        let data_obj = T::load(bytes)?;
-        Ok(Obj {
-            id: 0,
-            saved: true,
-            dirty: false,
-            data: data_obj,
-        })
+
+    fn to_bytes<T: ObjectTypeFactory>(&self) -> Vec<u8> {
+        self.data.to_bytes()
     }
 }
+
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct SaveWrapper<'a> {
     name: &'a str,
     bytes: &'a [u8],
-}
-
-impl SaveWrapper<'_> {
-    
 }
 
 pub struct ObjectStore {
@@ -134,16 +99,19 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn new_obj<T: ObjectType>(&mut self) -> Result<Box<Obj<T>>,RecordStoreError> {
+    pub fn new_obj<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, data_obj: T) -> Result<Box<Obj>,RecordStoreError> {
         if self.record_store.current_count() == 0 {
             return Err( RecordStoreError::ObjectStore("new_obj may not be called before root is created".to_string()) );
         }
         let new_id = self.record_store.next_id()?;
-        let mut new_obj = Obj::<T>::new();
+        let mut new_obj = Obj::new(data_obj);
         new_obj.id = new_id as u64;
+
         //  register it here or whatnot
+
         Ok(Box::new(new_obj))
     }
+/*
 
     ///
     ///
@@ -155,7 +123,7 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn save_obj<T: ObjectType>(&mut self,obj: &Obj<T>) -> Result<(),RecordStoreError> {
+    pub fn save_obj<T: ObjectType + ObjectTypeFactory + Serializable>(&mut self,obj: &Obj) -> Result<(),RecordStoreError> {
         let data = &obj.data;
         let serialized_bytes = bincode::serialize(&data).unwrap();
         let wrapper = SaveWrapper {
@@ -177,9 +145,16 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch<T: ObjectType>(&mut self, id: usize) -> Result<Box<Obj<T>>, RecordStoreError> {
+    pub fn fetch<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, id: usize) -> Result<Box<Obj>, RecordStoreError> {
         let bytes = self.record_store.fetch( id )?.unwrap();
-        let obj = Obj::<T>::load(&bytes)?;
+        let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
+        let boxed_type_obj = T::create_from_bytes(&bytes);
+        let obj = Obj {
+            id: id as u64,
+            dirty: false,
+            saved: true,
+            data: boxed_type_obj,
+        };
         Ok(Box::new(obj))
     }
     ///
@@ -192,17 +167,16 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch_root<T: ObjectType>(&mut self) -> Result<Box<Obj<T>>,RecordStoreError> {
+    pub fn fetch_root<T: ObjectType>(&mut self) -> Result<Box<Obj>,RecordStoreError> {
         if self.record_store.current_count() == 0 {
             let _ = self.record_store.next_id()?;
-            let new_root = Obj::<T>::new();
+            let new_root = Obj::new();
             self.save_obj(&new_root)?;
 
             return Ok(Box::new(new_root));
         }
         Ok(self.fetch(0)?)
     }
-/*
     ///
     ///
     /// # Arguments
@@ -245,15 +219,82 @@ impl ObjectStore {
 */
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Canary {
+    wingspan: i32,
+    name: String,
+}
+impl ObjectType for Canary {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("Failed to Serialize")
+    }
+}
+
+impl Serializable for Canary {}
+
+impl ObjectTypeFactory for Canary {
+    fn name() -> String { "Canary".to_string() }
+    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
+        let deserialized: Canary = bincode::deserialize(bytes).expect("Failed to deserialize");
+        Box::new(deserialized)
+    }
+}
+
+
+/*
+    ///
+    /// Mark the data in this object as needing a save.
+    ///
+    pub fn dirty(&self) {
+        //let DIRTY_CACHE: Arc<Mutex<HashMap<u64, Box<Obj<dyn Saveable>>>>> = Arc::new(Mutex::new(HashMap::new()));
+        //        let mut cache = DIRTY_CACHE.lock().unwrap();
+        //        cache.insert( self.id, Box::new(|| bincode::serialize(&self.data).unwrap().to_vec()) );
+
+    }
+    
+    /// Construct an object given an array of bytes.
+    ///
+    /// # Arguments
+    ///
+    /// * bytes - an array of bytes.
+    ///
+    /// # Returns
+    ///
+    /// * Ok(Obj<T>) - the constructed object
+    /// * Err(RecordStoreError::ObjectStore) - the bytes indicate a different data type than the Obj's type.
+    ///
+    pub fn load(bytes: &[u8]) -> Result<Obj<T>,RecordStoreError> {
+        let data_obj = T::load(bytes)?;
+        Ok(Obj {
+            id: 0,
+            saved: true,
+            dirty: false,
+            data: data_obj,
+        })
+    }
+
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+    #[derive(Getters)]
     struct Canary {
-        is_alive: bool,
-        wingspan: u64,
+        wingspan: i32,
+        name: String,
+    }
+
+    impl Canary {
+        fn new_default() -> Self {
+            Canary { wingspan: 12, name: "Beaux".to_string() }
+        }
     }
 
     impl ObjectType for Canary {
@@ -315,6 +356,8 @@ mod tests {
         assert_eq!( canary.saved, false );
         assert_eq!( canary.dirty, true );
         assert_eq!( canary.data.wingspan, 3 );
+
     }
 }
 
+*/
