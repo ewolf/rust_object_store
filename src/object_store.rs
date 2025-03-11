@@ -24,7 +24,10 @@ pub trait ObjectTypeFactory {
     fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType>;
 }
 
-
+//
+// WOLF - should this be a trait and the ObjectTypes have these fields
+//        in addition to their own? I'm not sure
+//
 // Struct that stores a `Box<dyn ObjectType>`
 pub struct Obj {
     pub id: u64,
@@ -216,31 +219,6 @@ impl ObjectStore {
 */
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Canary {
-    wingspan: i32,
-    name: String,
-}
-impl ObjectType for Canary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("Failed to Serialize")
-    }
-}
-
-impl Serializable for Canary {}
-
-impl ObjectTypeFactory for Canary {
-    fn name() -> String { "Canary".to_string() }
-    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
-        let deserialized: Canary = bincode::deserialize(bytes).expect("Failed to deserialize");
-        Box::new(deserialized)
-    }
-}
-
-
 /*
     ///
     /// Mark the data in this object as needing a save.
@@ -358,3 +336,29 @@ mod tests {
 }
 
 */
+
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Canary {
+    wingspan: i32,
+    name: String,
+}
+impl ObjectType for Canary {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("Failed to Serialize")
+    }
+}
+
+impl Serializable for Canary {}
+
+impl ObjectTypeFactory for Canary {
+    fn name() -> String { "Canary".to_string() }
+    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
+        let deserialized: Canary = bincode::deserialize(bytes).expect("Failed to deserialize");
+        Box::new(deserialized)
+    }
+}
+
