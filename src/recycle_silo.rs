@@ -1,3 +1,9 @@
+//! Provides the recycle_silo, a file data store with the ability to manage space by 
+//! recycling no longer needed record index slots. It stores de/serializable structs
+//! as fixed length byte records. This stores a silo stack of recycled indexes. Records
+//! that are stored to the recycle_silo are stored at the last recycled index (if any) or
+//! pushed to the end of the record stack. Indexes can be marked for recycling.
+//! 
 use crate::silo::{Silo, RecordStoreError};
 
 use serde::{Serialize, Deserialize};
@@ -7,34 +13,40 @@ use std::vec::Vec;
 
 // ----------------------------------------------------------------
 
+/// SiloByteData wraps a byte vec for data storage
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct SiloByteData {
-    data_length: usize,
     bytes: Vec<u8>,
 }
 
 impl SiloByteData {
+    ///
+    /// Creates a new SiloByteData with the given byte array.
+    ///
     pub fn new( data: &[u8] ) -> SiloByteData {
         SiloByteData {
-            data_length: data.len(),
             bytes: data.to_vec(),
         }
     }
+    ///
+    /// Returns the size in bytes of the byte array.
+    ///
     pub fn size(&self) -> usize {
-        (std::mem::size_of::<usize>() + self.bytes.len()).try_into().unwrap()
+        self.bytes.len()
     }
 }
 
 // ----------------------------------------------------------------
 
+// store the recycle ids in this
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct SiloIdData {
-    id: usize,
+    idx: usize,
 }
 impl SiloIdData {
-    fn new( id: usize ) -> SiloIdData {
+    fn new( idx: usize ) -> SiloIdData {
          SiloIdData {
-            id
+            idx
         }
     }
 }
@@ -42,12 +54,19 @@ impl SiloIdData {
 
 // ----------------------------------------------------------------
 
+/// Store records and recycle record indexes to prevent run away growth.
 pub struct RecycleSilo {
     data_silo: Silo<SiloByteData>,
     recycler_silo: Silo<SiloIdData>,
 }
 
 impl RecycleSilo {
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// # Returns
+    ///
     pub fn new(
         silo_dir: String,
         record_size: usize,
@@ -64,6 +83,12 @@ impl RecycleSilo {
 	    recycler_silo,
 	}
     }
+    /// Opens this silo if it has not already been opened.
+    ///
+    /// # Returns
+    ///
+    /// * OK(()) - opening was successfull.
+    /// * `Error(ReocordStoreError::IoError)` when there is a filesystem problem
     pub fn open(&mut self) -> Result<(), RecordStoreError>
     {
         let _ = self.data_silo.open();
@@ -71,48 +96,101 @@ impl RecycleSilo {
         Ok(())
     }
 
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// # Returns
+    ///
     pub fn recycle(&mut self, idx: usize) -> Result<(),RecordStoreError> {
         self.recycler_silo.push( &SiloIdData::new( idx ))?;
         Ok(())
     }
 
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// # Returns
+    ///
     pub fn live_records(&mut self) -> usize {
         self.data_silo.current_count - self.recycler_silo.current_count
     }
 
+    /// Returns how many records there are total that are not recycled.
+    ///
+    /// # Returns
+    ///
+    /// * usize - number of records not recycled
     pub fn recycle_count(&mut self) -> usize {
         self.recycler_silo.current_count
     }
 
+    /// Returns how many records there are total, including those
+    /// marked for recycling.
+    ///
+    /// # Returns
+    ///
+    /// * usize - number of records
     pub fn data_count(&mut self) -> usize {
         self.data_silo.current_count
     }
 
+    /// Push a record to the end of this silo and get that index.
+    ///
+    /// # Arguments
+    ///
+    /// * record - SiloByteData record
+    ///
+    /// # Returns
+    ///
+    /// * Ok(usize) - index assigned to record
+    /// * Err(RecordStoreError::IoError) - when there is a filesystem problem.
+    ///
     pub fn push(&mut self, record: &SiloByteData) -> Result<usize,RecordStoreError> {
         match self.recycler_silo.pop() {
             Some(data) => {
-                self.data_silo.put_record( data.id, record)?;
-                Ok(data.id)
+                self.data_silo.put_record( data.idx, record)?;
+                Ok(data.idx)
             },
             None => self.data_silo.push( record ),
         }
     }
 
-    pub fn put_record(&mut self, id: usize, record: &SiloByteData) -> Result<usize,RecordStoreError> {
+    /// Store a record that had the given index and return a new index. Recycles the 
+    /// given index.
+    ///
+    /// # Arguments
+    ///
+    /// * idx - index record original location
+    /// * record - SiloByteData record
+    ///
+    /// # Returns
+    ///
+    /// * Ok(usize) - new index assigned record
+    /// * Err(RecordStoreError::IoError) - when there is a filesystem problem.
+    ///
+    pub fn put_record(&mut self, idx: usize, record: &SiloByteData) -> Result<usize,RecordStoreError> {
         match self.recycler_silo.pop() {
             Some(data) => {
-                self.data_silo.put_record( data.id, record )?;
-                Ok(data.id)
+                self.data_silo.put_record( data.idx, record )?;
+                Ok(data.idx)
             },
             None => {
                 let new_idx = self.data_silo.push( record )?;
-                let _ = self.recycler_silo.push( &SiloIdData::new( id ))?;
+                let _ = self.recycler_silo.push( &SiloIdData::new( idx ))?;
                 Ok(new_idx)
             }
         }
 
     }
 
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// # Returns
+    ///
     pub fn fetch_record(&mut self, idx: usize) -> Option<Vec<u8>> {
         match self.data_silo.fetch_record( idx ) {
             Some(data) => Some(data.bytes.to_vec()),
@@ -120,6 +198,14 @@ impl RecycleSilo {
         }
     }
 
+    ///
+    /// Removes the last record from this silo and returns it.
+    ///
+    /// #Returns
+    ///
+    /// * `None` - silo is empty
+    /// * `Vec<u8>` - record as a byte array.
+    ///
     pub fn pop(&mut self) -> Option<Vec<u8>> {
         match self.data_silo.pop() {
             Some(data) => Some(data.bytes.to_vec()),
@@ -127,6 +213,14 @@ impl RecycleSilo {
         }
     }
 
+    ///
+    /// Looks up the last record from this silo and returns it.
+    ///
+    /// #Returns
+    ///
+    /// * `None` - silo is empty
+    /// * `Vec<u8>` - record as a byte array.
+    ///
     pub fn peek(&mut self) -> Option<Vec<u8>> {
         match self.data_silo.peek() {
             Some(data) => Some(data.bytes.to_vec()),

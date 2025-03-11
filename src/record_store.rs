@@ -1,3 +1,6 @@
+//!
+//! Provides RecordStore which stores byte data of any size in an array of fixed record files.
+//!
 use crate::silo::{Silo, RecordStoreError};
 use crate::recycle_silo::{RecycleSilo, SiloByteData};
 
@@ -61,9 +64,16 @@ pub struct RecordStore {
     index_silo: Silo<RecordIndexData>,
 }
 
-
+/// Store and fetch byte data using the file system.
 impl RecordStore {
-
+    
+    ///
+    /// Create a new recordstore in the given directory.
+    ///
+    /// # Arguments
+    ///
+    /// * base_dir - &str representing a directory path.
+    ///
     pub fn new(base_dir: &str) -> RecordStore {
         let mut data_silos: Vec<RecycleSilo> = Vec::new();
         let mut silo_id = 0;
@@ -84,10 +94,24 @@ impl RecordStore {
         }
     }
 
+    ///
+    /// Return how many records are stored in the silo.
+    ///
+    /// # Returns
+    ///
+    /// * usize - number of records in this record store.
+    /// 
     pub fn current_count(&mut self) -> usize {
         self.index_silo.current_count
     }
 
+    /// Create and return a new record id.
+    ///
+    /// # Returns
+    ///
+    /// * Ok(usize) - new record id
+    /// * Err(RecordStoreError::IoError) - problem with the file system.
+    ///
     pub fn next_id(&mut self) -> Result<usize,RecordStoreError> {
         let _ = self.index_silo.open();
 
@@ -99,6 +123,18 @@ impl RecordStore {
         Ok( data_id )
     }
 
+    /// Lookup a record and return it.
+    ///
+    /// # Arguments
+    ///
+    /// * id - record id
+    ///
+    /// # Returns
+    ///
+    /// * OK(Some(Vec<u8>)) - the byte data of the record if it exists.
+    /// * OK(None) - The id is beyond the number of records.
+    /// * Err(RecordStoreError::RecordStore) - unable to find silo or unable to find index for record.
+    ///
     pub fn fetch(&mut self, id: usize) -> Result<Option<Vec<u8>>,RecordStoreError> {
         let _ = self.index_silo.open();
         let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string()))?;
@@ -112,6 +148,20 @@ impl RecordStore {
         }
     }
 
+    ///
+    /// Stores the record at the given id.
+    ///
+    /// # Arguments
+    ///
+    /// * id - id of record to store data.
+    /// * data - byte array of the data to stow.
+    ///
+    /// # Returns
+    ///
+    /// * Ok(()) - record was stowed.
+    /// * Err(RecordStoreError::IoError) - problem with filesystem
+    /// * Err(RecordStoreError::RecordStore) - unable to find silo or unable to find index for record.
+    ///
     pub fn stow(&mut self, id: usize, data: &[u8]) -> Result<(),RecordStoreError> {
         let _ = self.index_silo.open();
 

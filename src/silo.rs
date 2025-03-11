@@ -1,3 +1,5 @@
+//! Provides the silo, a file data store that stores de/serializable structs as
+//! fixed length byte records in a collection of silo files.
 use serde::{Serialize, Deserialize};
 use std::fs;
 use std::fs::{OpenOptions,File};
@@ -12,12 +14,16 @@ use thiserror::Error;
 
 #[derive(Debug,Error)]
 pub enum RecordStoreError {
+    /// IO went wrong doing an operation
     #[error("An IO error occurred: {0}")]
     IoError(std::io::Error),
+    /// Problem in a silo
     #[error("A silo error occurred: {0}")]
     Silo(String),
+    /// Problem in a record store
     #[error("A record store error occurred: {0}")]
     RecordStore(String),
+    /// Problem in an object store
     #[error("An object store error occurred: {0}")]
     ObjectStore(String),
 }
@@ -30,18 +36,35 @@ impl From<std::io::Error> for RecordStoreError {
 
 // ----------------------------------------------------------------
 
+/// encapsulates a number of files for storing records of type
+/// Serialize + for<'de> Deserialize<'de>
 pub struct Silo<T: Serialize + for<'de> Deserialize<'de>> {
+    /// how many records this silo currently holds
     pub current_count: usize,
-    pub record_size: usize,
-    pub silo_dir: String,
-    pub records_per_subsilo: usize,
+
+    record_size: usize,
+    silo_dir: String,
+    records_per_subsilo: usize,
     subsilos: Vec<File>,
     is_open: bool,
     _silo_type: PhantomData<T>,
 }
 
 impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
-    
+    ///
+    /// Create a new silo for the given type which must
+    /// implement Serialize + for<'de> Deserialize<'de>
+    ///
+    /// # Arguments
+    ///
+    /// * `silo_dir` Directory silo files are located.
+    /// * `record_size` Size of record in bytes.
+    /// * `max_file_size` Maximum size of a silo file.
+    ///
+    /// # Returns
+    ///
+    /// * `Silo<T>` 
+    ///
     pub fn new( silo_dir: String,
                 record_size: usize,
                 max_file_size: usize ) -> Silo<T>
@@ -57,6 +80,16 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         }
     }
 
+    ///
+    /// Opens the silo if it is not already opened.
+    /// Makes sure there is at least one silo file.
+    /// Calculates how many records there are in this silo.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - successful open
+    /// * `Error(ReocordStoreError::IoError)` when there is a filesystem problem
+    ///
     pub fn open( &mut self ) -> Result<(), RecordStoreError>
     {
         if self.is_open {
@@ -132,10 +165,14 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         Ok(())
     }
 
-    //
-    // Returns the subsilo file that corresponds to the given index.
-    // This ensures the file size will be large enough to handle the given index.
-    //
+    ///
+    /// Returns the subsilo file that corresponds to the given index.
+    /// This ensures the file size will be large enough to handle the given index.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` the index of a record.
+    ///
     fn subsilo_file_for_idx(&mut self, idx: usize) -> (&mut File,usize) {
         let subsilo_idx = idx / self.records_per_subsilo;
         let idx_in_subsilo =  idx % self.records_per_subsilo;
@@ -145,7 +182,18 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         (subsilo_file,idx_in_subsilo)
     }
 
-
+    ///
+    /// Pushes a record on to the end of the silo.
+    ///
+    /// # Arguments
+    ///
+    /// * `record` a struct that is de/serializeable.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(usize)` - new index in the silo.
+    /// * `Error(ReocordStoreError::IoError)` when there is a filesystem problem
+    ///
     pub fn push(&mut self, record: &T) -> Result<usize,RecordStoreError> {
 
         let new_id = self.current_count;
@@ -167,9 +215,22 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         Ok(new_id)
     }
 
-    pub fn put_record(&mut self, id: usize, record: &T) -> Result<(),RecordStoreError> {
-        if id < self.current_count {
-            let (subsilo_file,_idx_in_subsilo) = self.subsilo_file_for_idx(id);
+    ///
+    /// Writes a record to the given index which must already exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` 
+    /// * `record` a struct that is de/serializeable.
+    ///
+    /// #Returns
+    ///
+    /// * `Ok(())` - Record was put
+    /// * `Err(RecordStoreError::SiloError)` - index was out of bounds.
+    ///
+    pub fn put_record(&mut self, idx: usize, record: &T) -> Result<(),RecordStoreError> {
+        if idx < self.current_count {
+            let (subsilo_file,_idx_in_subsilo) = self.subsilo_file_for_idx(idx);
             let encoded: Vec<u8> = bincode::serialize(record).expect("Serialization failed");
             match subsilo_file.write_all(&encoded) {
                 Err(err) => Err(RecordStoreError::IoError(err)),
@@ -177,10 +238,22 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
             }
         } else {
             let cc = self.current_count;
-            Err(RecordStoreError::Silo(format!("put_record: idx {} must be lower than current count {}", id, cc)))
+            Err(RecordStoreError::Silo(format!("put_record: idx {} must be lower than current count {}", idx, cc)))
         }
     }
 
+    ///
+    /// Returns a record from the given index.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` : index of record to look up
+    ///
+    /// #Returns
+    ///
+    /// * `None` - index was beyond the last record.
+    /// * `T` - record struct.
+    ///
     pub fn fetch_record(&mut self, idx: usize) -> Option<T> {
         if idx >= self.current_count {
             return None;
@@ -189,11 +262,19 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
 
         let mut buffer = Vec::new();
         subsilo_file.read_to_end(&mut buffer).expect("Reading failed");
-        let data: T = bincode::deserialize(&buffer).expect("Deserialization failed");
+        let record: T = bincode::deserialize(&buffer).expect("Deserialization failed");
 
-        Some(data)
+        Some(record)
     }
 
+    ///
+    /// Removes the last record from this silo and returns it.
+    ///
+    /// #Returns
+    ///
+    /// * `None` - silo is empty
+    /// * `T` - record struct.
+    ///
     pub fn pop(&mut self) -> Option<T> {
         if self.current_count == 0 {
             return None
@@ -214,6 +295,15 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         Some(data)
     }
 
+
+    ///
+    /// Looks up the last record from this silo and returns it.
+    ///
+    /// #Returns
+    ///
+    /// * `None` - silo is empty
+    /// * `T` - record struct.
+    ///
     pub fn peek(&mut self) -> Option<T> {
         if self.current_count == 0 {
             return None
@@ -229,6 +319,19 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
         Some(data)
     }
 
+    ///
+    /// Returns the silo file that would contain the given record by index
+    /// , creating it if it does not exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `idx` : index of record to look up silo file.
+    ///
+    /// #Returns
+    ///
+    /// * `OK(File)` - File struct
+    /// * `Err(RecordStoreError::IoError)` - If a filesystem error occurs.
+    ///
     fn subsilo(&mut self,idx: usize) -> Result<&mut File, RecordStoreError> {
         let mut len = self.subsilos.len() as usize;
         while len <= idx {
@@ -245,6 +348,18 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
 
 }
 
+///
+/// Make sure a directory path exists.
+///
+/// # Arguments
+///
+/// * `dir` : String representation of directory path to ensure.
+///
+/// #Returns
+///
+/// * `OK(())` - If the directory tree was created
+/// * `Err(RecordStoreError::IoError)` - If a filesystem error occurs.
+///
 fn ensure_path(dir: &String) -> Result<(), RecordStoreError> {
     if ! Path::new(&dir).exists() {
         fs::create_dir_all(dir)?;
