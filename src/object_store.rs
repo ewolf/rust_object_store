@@ -1,3 +1,23 @@
+/*
+ TODO:
+    
+  *  write tests with the Getters macro
+
+  *  rename Getters macro to Obj or something
+
+  * Apply getters and setters to Obj itself? 
+      can dyn ObjectType be the Obj type?
+
+  * Make a reference Option for connecting different objects
+
+  * HashMap and Vec implementations of ObjectType
+     - trying at the bottom of this file
+
+  * Create Root
+
+*/
+
+
 //!
 //! 
 //!
@@ -6,8 +26,30 @@ use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
 
 use serde::{Serialize, Deserialize};
-use std::any::Any;
 use bincode;
+
+use lazy_static::lazy_static;
+
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::RwLock;
+use ctor::ctor;
+
+// Type alias for factory functions
+type FactoryFn = fn() -> Box<dyn ObjectType + Send + Sync>;
+
+// Global registry for struct creation
+lazy_static! {
+    static ref REGISTRY: RwLock<HashMap<String, FactoryFn>> = RwLock::new({
+        HashMap::new()
+    });
+}
+// Function to register new structs at runtime
+fn register_struct(name: &str, constructor: FactoryFn) {
+    let mut registry = REGISTRY.write().unwrap();
+    registry.insert(name.to_string(), constructor);
+}
+
 
 // Trait for objects that can be stored dynamically
 pub trait ObjectType {
@@ -358,6 +400,54 @@ impl ObjectTypeFactory for Canary {
     fn name() -> String { "Canary".to_string() }
     fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
         let deserialized: Canary = bincode::deserialize(bytes).expect("Failed to deserialize");
+        Box::new(deserialized)
+    }
+}
+
+#[ctor]
+fn register_Canary() {
+    register_struct("Canary", || Box::new( Canary { name: "BANSO".to_string(), wingspan: 66 } ) );
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+enum VecObjectTypeOption {
+    Bool,
+    I32,
+    I64,
+    U32,
+    U64,
+    F32,
+    F64,
+    String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct VecObjectType {
+    vec: Vec<VecObjectTypeOption>
+}
+impl VecObjectType {
+    pub fn new(opt: VecObjectTypeOption) -> Self {
+        VecObjectType {
+            vec: Vec::new()
+        }
+    }
+}
+
+impl ObjectType for VecObjectType {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("Failed to Serialize")
+    }
+}
+
+impl Serializable for VecObjectType {}
+
+impl ObjectTypeFactory for VecObjectType {
+    fn name() -> String { "VecObjectType".to_string() }
+    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
+        let deserialized: VecObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
         Box::new(deserialized)
     }
 }
