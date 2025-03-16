@@ -123,22 +123,21 @@ struct SaveWrapper<'a> {
     bytes: &'a [u8],
 }
 
-static OBJECT_STORES: OnceLock<Mutex<HashMap<String,Arc<Mutex<ObjectStore>>>>> = OnceLock::new();
+static RECORD_STORES: OnceLock<Mutex<HashMap<String,Arc<Mutex<RecordStore>>>>> = OnceLock::new();
 
-pub fn open_object_store( dir: &str ) -> Arc<Mutex<ObjectStore>> {
-    let mutex = OBJECT_STORES.get_or_init(|| {
+fn get_record_store( dir: &str ) -> Arc<Mutex<RecordStore>> {
+    let mutex = RECORD_STORES.get_or_init(|| {
         Mutex::new(HashMap::new())
     });
     let mut map = mutex.lock().unwrap();
     map.entry( dir.to_string() )
-        .or_insert_with(|| Arc::new(Mutex::new(ObjectStore::new(dir))))
+        .or_insert_with(|| Arc::new(Mutex::new(RecordStore::new(dir))))
         .clone()
 }
 
 
-
 pub struct ObjectStore {
-    record_store: RecordStore,
+    base_dir: String,
 }
 
 impl ObjectStore {
@@ -154,14 +153,9 @@ impl ObjectStore {
     /// * ObjectStore
     ///
     pub fn new(base_dir: &str) -> ObjectStore {
-        let record_store = RecordStore::new( base_dir );
-
-        let os = ObjectStore {
-            record_store,
-        };
-
-        os
+        ObjectStore { base_dir: base_dir.to_string() }
     }
+
     ///
     /// Create a new Obj of the given type
     ///
@@ -173,11 +167,13 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn new_obj<T: ObjectType>(&mut self, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
-        if self.record_store.current_count() == 0 {
+    pub fn new_obj<T: ObjectType>(& self, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
+        let binding = get_record_store( &self.base_dir );
+        let mut record_store = binding.lock().unwrap();
+        if record_store.current_count() == 0 {
             return Err( RecordStoreError::ObjectStore("new_obj may not be called before root is created".to_string()) );
         }
-        let new_id = self.record_store.next_id()?;
+        let new_id = record_store.next_id()?;
         let mut new_obj = Obj::<T>::new(data_obj);
         new_obj.id = new_id as u64;
 
@@ -196,15 +192,17 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn save_obj<T: ObjectType>(&mut self,obj: &Obj<T>) -> Result<(),RecordStoreError> {
+    pub fn save_obj<T: ObjectType>(&self,obj: &Obj<T>) -> Result<(),RecordStoreError> {
         let serialized_bytes = obj.to_bytes();
         let wrapper = SaveWrapper {
             name: &T::name(),
             bytes: &serialized_bytes,
         };
+        let binding = get_record_store( &self.base_dir );
+        let mut record_store = binding.lock().unwrap();
         let serialized_bytes = bincode::serialize(&wrapper).unwrap();
 //        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
-        self.record_store.stow( obj.id as usize, &serialized_bytes )?;
+        record_store.stow( obj.id as usize, &serialized_bytes )?;
         Ok(())
     }
 
@@ -218,8 +216,14 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch<T: ObjectType>(&mut self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
-        let bytes = self.record_store.fetch( id as usize )?.unwrap();
+    pub fn fetch<T: ObjectType>(&self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
+        let binding = get_record_store( &self.base_dir );
+        let mut record_store = binding.lock().unwrap();
+        self._fetch( &mut record_store, id )
+    }
+
+    pub fn _fetch<T: ObjectType>(&self, record_store:&mut RecordStore, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
+        let bytes = record_store.fetch( id as usize )?.unwrap();
 //println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
         if wrapper.name != T::name() {
@@ -228,6 +232,7 @@ impl ObjectStore {
         let obj = Obj::from_bytes(&wrapper.bytes, id);
         Ok(Box::new(obj))
     }
+
 
     ///
     ///
@@ -239,18 +244,23 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch_root(&mut self) -> Box<Obj<HashMapObjectType>> {
-//        println!( "current count is {}", self.record_store.current_count() );
-        if self.record_store.current_count() == 0 {
-            let _ = self.record_store.next_id().expect("unable to create root id");
+    pub fn fetch_root(&self) -> Box<Obj<HashMapObjectType>> {
+        let binding = get_record_store( &self.base_dir );
+        let mut record_store = binding.lock().unwrap();
+        //        println!( "current count is {}", record_store.current_count() );
+        if record_store.current_count() == 0 {
+            let _ = record_store.next_id().expect("unable to create root id");
             let new_root = Obj::new(HashMapObjectType::new());
             // id is already 0
             self.save_obj::<HashMapObjectType>(&new_root).expect("unable to save the root");
 
             return Box::new(new_root)
         }
-        let hmot: Box<HashMapObjectType> = self.fetch::<HashMapObjectType>(0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
+        eprintln!( "getting" );
+        let hmot: Box<HashMapObjectType> = self._fetch::<HashMapObjectType>(&mut record_store,0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
+        eprintln!( "got hmot" );
         let root = Obj::new_from_boxed(hmot);
+                eprintln!( "got root finally" );
         Box::new(root)
     }
 /*
