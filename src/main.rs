@@ -367,7 +367,7 @@ fn find_coincs(exem_os: &ObjectStore,
         let mut coin = coinc_os.new_obj( RefVec { vec: Vec::new() } )?;
         for cue_idx in start_cue_idx..end_cue_idx {
             let mut map = coinc_os.new_obj( U32HashMap { hash: HashMap::new() } )?;
-            coin.data.vec.insert( cue_idx as usize, map.make_ref() );
+            coin.getmut_vec().insert( cue_idx as usize, map.make_ref() );
             let _ = coinc_os.save_obj( &mut map );
         }
         coinc_root.put("coincs", coin.make_ref_opt() );
@@ -539,7 +539,7 @@ fn find_coincs(exem_os: &ObjectStore,
                         coincs.get_vec().get( a_cue_idx ).unwrap().id
                     ).unwrap();
                     for (b_cue_idx, count) in delta_map {
-                        *idx_coincs.data.hash.entry(*b_cue_idx).or_insert(0) += count;
+                        *idx_coincs.getmut_hash().entry(*b_cue_idx).or_insert(0) += count;
                     }
                     let _ = coinc_os.save_obj( &mut idx_coincs );
                 }
@@ -639,7 +639,7 @@ fn calculate_cue_affinities(exem_os: &ObjectStore,
         let mut aff = affin_os.new_obj( RefVec { vec: Vec::new() } )?;
         for cue_idx in 0..end_cue_idx {
             let mut map = affin_os.new_obj( U32F32HashMap { hash: HashMap::new() } )?;
-            aff.data.vec.insert( cue_idx as usize, map.make_ref() );
+            aff.getmut_vec().insert( cue_idx as usize, map.make_ref() );
             let _ = affin_os.save_obj( &mut map );
         }
         affin_root.put("affinities", aff.make_ref_opt() );
@@ -671,8 +671,8 @@ fn calculate_cue_affinities(exem_os: &ObjectStore,
 
             if scores.len() > 0 {
                 // transfer the data from scores to the affinites u32f32hashmap
-                let target = affin_os.fetch::<U32F32HashMap>(affinities.get_vec().get( local_a_idx ).unwrap().id)?;
-                let mut target_hash = target.data.hash;
+                let mut target = affin_os.fetch::<U32F32HashMap>(affinities.get_vec().get( local_a_idx ).unwrap().id)?;
+                let mut target_hash = target.getmut_hash();
                 for key in scores.keys() {
                     target_hash.insert( *key, *scores.get(key).unwrap() );
                 }
