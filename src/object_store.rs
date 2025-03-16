@@ -33,7 +33,6 @@ use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::{Mutex, OnceLock, Arc};
 
 #[derive(Serialize, Deserialize, Debug)]
