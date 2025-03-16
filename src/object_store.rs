@@ -143,16 +143,20 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch_root(&mut self) -> Result<Box<Obj>,RecordStoreError> {
+    pub fn fetch_root(&mut self) -> Box<HashMapObjectType> {
         if self.record_store.current_count() == 0 {
-            let _ = self.record_store.next_id()?;
+            let _ = self.record_store.next_id().expect("unable to create root id");
             let new_root = Obj::new(HashMapObjectType::new());
             // id is already 0
-            self.save_obj::<HashMapObjectType>(&new_root)?;
+            self.save_obj::<HashMapObjectType>(&new_root).expect("unable to save the root");
 
             return Ok(Box::new(new_root));
         }
-        Ok(self.fetch::<HashMapObjectType>(0)?)
+        let hmot = self.fetch::<HashMapObjectType>(0).expect("unable to fetch the root").data;
+        match hmot.as_any().downcast_ref::<HashMapObjectType>() {
+            None => panic!("unable to fetch the root"),
+            Some(root) => Box::new(root)
+        }
     }
 
     ///
