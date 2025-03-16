@@ -141,6 +141,17 @@ struct SaveWrapper<'a> {
 
 static RECORD_STORES: OnceLock<Mutex<HashMap<String,Arc<Mutex<RecordStore>>>>> = OnceLock::new();
 
+/// Returns a thread safe mutex holding a record store for the given directory. 
+/// Each record store lives in its own directory.
+///
+/// # Arguments
+/// 
+/// * dir - directory where record store lives.
+///
+/// # Returns
+///
+/// * Arc<Mutex<RecordStore>>
+///
 fn get_record_store( dir: &str ) -> Arc<Mutex<RecordStore>> {
     let mutex = RECORD_STORES.get_or_init(|| {
         Mutex::new(HashMap::new())
