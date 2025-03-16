@@ -2,6 +2,10 @@ use yote_recordstore_rust::object_store::*;
 use recordstore_macros::*;
 use yote_recordstore_rust::silo::RecordStoreError;
 
+use yote_recordstore_rust::object_store::Ref;
+use yote_recordstore_rust::RefVec;
+use yote_recordstore_rust::RefVecExt;
+
 use regex::Regex;
 
 use statrs::statistics::Statistics;
@@ -32,11 +36,6 @@ struct Config {
 
     min_overall_cue_perc: f32,
     max_overall_cue_perc: f32,
-}
-
-#[derive(Serialize, Deserialize, Getters, Debug)]
-pub struct RefVec {
-    vec: Vec<Ref>,
 }
 
 #[derive(Serialize, Deserialize, Getters, Debug)]

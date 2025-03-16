@@ -137,7 +137,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
 
     // Generate the `impl` block
     let expanded = quote! {
-        trait #ext_name {
+        pub trait #ext_name {
             #(#exts)*
             fn lookup_field(&self, name: String) -> Option<ObjTypeOption>;
         }
