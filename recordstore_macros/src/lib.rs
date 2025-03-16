@@ -62,13 +62,13 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
                 if cap_type == "String" {
                     Some(quote! {
                         if name == #field_name_str {
-                            return Some(ObjectTypeOption::#type_ident(String::from(&data.#field_name)));
+                            return Some(ObjTypeOption::#type_ident(String::from(&data.#field_name)));
                         }
                     })
                 } else {
                     Some(quote! {
                         if name == #field_name_str {
-                            return Some(ObjectTypeOption::#type_ident(data.#field_name));
+                            return Some(ObjTypeOption::#type_ident(data.#field_name));
                         }
                     })
                 }
@@ -80,7 +80,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
         }
     });
     let lookup_field_fun = quote! {
-        fn lookup_field(&self,name: String) -> Option<ObjectTypeOption> {
+        fn lookup_field(&self,name: String) -> Option<ObjTypeOption> {
             let data:& #struct_name = self.data.as_any().downcast_ref::<#struct_name>().expect("unable to downcast");
             #(#ifs)*
             None
@@ -133,13 +133,13 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         trait #ext_name {
             #(#exts)*
-            fn lookup_field(&self, name: String) -> Option<ObjectTypeOption>;
+            fn lookup_field(&self, name: String) -> Option<ObjTypeOption>;
         }
         impl #ext_name for Obj<#struct_name> {
             #(#getters)*
             #lookup_field_fun
         }
-        impl ObjectType for #struct_name {
+        impl ObjType for #struct_name {
             fn as_any(&self) -> &dyn Any {
                 self
             }

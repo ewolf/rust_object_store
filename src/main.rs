@@ -15,42 +15,10 @@ struct CueStore {
 struct U32Vec {
     vec: Vec<u32>,
 }
-impl VecObjectTypeExt for Obj<U32Vec> {
-    fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
-        self.data.vec.get(key)
-    }
-    fn push(&mut self, val: ObjectTypeOption) {
-        self.dirty = true;
-        self.data.vec.push(val);
-    }
-    fn len(&self) -> usize {
-        self.data.vec.len()
-    }
-    fn insert(&mut self, key: usize, val: ObjectTypeOption) {
-        self.dirty = true;
-        self.data.vec.insert(key, val);
-    }
-}
 
 #[derive(Serialize, Deserialize, Getters, Debug)]
-struct U32VecVec {
+struct RefVec {
     vec: Vec<Ref>,
-}
-impl VecObjectTypeExt for Obj<U32VecVec> {
-    fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
-        self.data.vec.get(key)
-    }
-    fn push(&mut self, val: ObjectTypeOption) {
-        self.dirty = true;
-        self.data.vec.push(val);
-    }
-    fn len(&self) -> usize {
-        self.data.vec.len()
-    }
-    fn insert(&mut self, key: usize, val: ObjectTypeOption) {
-        self.dirty = true;
-        self.data.vec.insert(key, val);
-    }
 }
 
 #[derive(Serialize, Deserialize, Getters, Debug)]
@@ -64,7 +32,7 @@ struct Exemplars {
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use regex::Regex;
-fn load_exems(file_name: &str, object_store: ObjectStore) 
+fn load_exems(file_name: &str, object_store: &ObjectStore) 
               -> Result<Box<Obj<Exemplars>>,RecordStoreError> 
 {
     let binding = object_store.record_store_binding();
@@ -72,10 +40,10 @@ fn load_exems(file_name: &str, object_store: ObjectStore)
 
     let mut root = object_store.fetch_root_rs(&mut record_store);
 
-    if let Some(ObjectTypeOption::Ref(exems_ref)) = root.get("exemplars") {
-        let exems: Exemplars = object_store.fetch_rs(&mut record_store, exems_ref.id)?;
-        let uniq_exems = object_store.fetch_rs(&mut record_store, exems.get_uniq_exems_ref().id )?;
-        eprintln!( "ALREADY HAVE THE exems {}. id {}", uniq_exems.data.len(), exems.id );
+    if let Some(ObjTypeOption::Ref(exems_ref)) = root.get("exemplars") {
+        let exems = object_store.fetch_rs(&mut record_store, exems_ref.id)?;
+        let uniq_exems = object_store.fetch_rs::<RefVec>(&mut record_store, exems.get_uniq_exems_ref().id )?;
+        eprintln!( "ALREADY HAVE THE exems {}. id {}", uniq_exems.data.vec.len(), exems.id );
 
         return Ok(exems);
     }
@@ -89,14 +57,12 @@ fn load_exems(file_name: &str, object_store: ObjectStore)
     let mut uniq_exems_vec: Vec<Ref> = Vec::new();
 
     let mut needs_title = true;
-    let mut title = String::new();
 
     for line_result in reader.split(b'\n') {
         let line_bytes = line_result?;
         let line = String::from_utf8_lossy(&line_bytes);
         if needs_title {
-            title = line.to_string();
-            println!("ARTICLE {}", title);
+            println!("ARTICLE {}", line);
             needs_title = false;
         } else {
             let line = line.to_lowercase();
@@ -128,14 +94,15 @@ fn load_exems(file_name: &str, object_store: ObjectStore)
                 }
             }
 
+            let mut uniq_cue_idxs = seq_cue_idxs.clone();
+            uniq_cue_idxs.sort_unstable();
+            uniq_cue_idxs.dedup();
+
             let seq_exem = object_store
                 .new_obj_rs( &mut record_store, U32Vec { vec: seq_cue_idxs } )?;
             
             seq_exems_vec.push( seq_exem.make_ref() );
 
-            let mut uniq_cue_idxs = seq_cue_idxs.clone();
-            uniq_cue_idxs.sort_unstable();
-            uniq_cue_idxs.dedup();
 
             let uniq_exem = object_store
                 .new_obj_rs( &mut record_store, U32Vec { vec: uniq_cue_idxs } )?;
@@ -149,9 +116,9 @@ fn load_exems(file_name: &str, object_store: ObjectStore)
     let cuestore = object_store.new_obj_rs( &mut record_store, 
                                              CueStore { cues, cue2idx } )?;
     let seq_exems = object_store.new_obj_rs( &mut record_store, 
-                                              U32VecVec { vec: seq_exems_vec } )?;
+                                              RefVec { vec: seq_exems_vec } )?;
     let uniq_exems = object_store.new_obj_rs( &mut record_store, 
-                                               U32VecVec { vec: uniq_exems_vec } )?;
+                                               RefVec { vec: uniq_exems_vec } )?;
 
     let exems = object_store.new_obj_rs( &mut record_store, 
                                           Exemplars { 
@@ -170,9 +137,10 @@ fn main() {
 
     let exem_os = ObjectStore::new("./data/exems");
     
-    let exems = load_exems("./source_data/all_articles.txt", exem_os).expect("got exems");
-    let seq_exems = exem_os.fetch::<U32VecVec>( exems.get_seq_exems_ref().id ).expect("No way");
-    eprintln!(" exems howmany ? {}", seq_exems.data.len() );
+    let exems = load_exems("./source_data/all_articles.txt", &exem_os).expect("got exems");
+
+    let seq_exems = exem_os.fetch::<RefVec>( exems.get_seq_exems_ref().id ).expect("No way");
+    eprintln!(" exems howmany ? {}", seq_exems.data.vec.len() );
 
 
     println!("HI");

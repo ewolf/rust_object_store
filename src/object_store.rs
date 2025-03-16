@@ -11,11 +11,11 @@
   *  rename Getters macro to Obj or something
 
   * Apply getters and setters to Obj itself? 
-      can dyn ObjectType be the Obj type?
+      can dyn ObjType be the Obj type?
 
   * Make a reference Option for connecting different objects
 
-  * HashMap and Vec implementations of ObjectType
+  * HashMap and Vec implementations of ObjType
      - trying at the bottom of this file
 
   * Create Root
@@ -48,22 +48,22 @@ impl Ref {
     pub fn new(id: u64) -> Self {
         Ref { id }
     }
-    pub fn load<T: ObjectType>(&self, object_store: &mut ObjectStore) -> Result<Box<Obj<T>>, RecordStoreError> {
+    pub fn load<T: ObjType>(&self, object_store: &mut ObjectStore) -> Result<Box<Obj<T>>, RecordStoreError> {
         object_store.fetch( self.id )
     }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum ObjectTypeOption {
+pub enum ObjTypeOption {
     Bool(bool),
     Char(char),
-    I32(i8),
-    I32(i16),
+    I8(i8),
+    I16(i16),
     I32(i32),
     I64(i64),
     I128(i128),
-    U32(u8),
-    U32(u16),
+    U8(u8),
+    U16(u16),
     U32(u32),
     U64(u64),
     U128(u128),
@@ -73,7 +73,7 @@ pub enum ObjectTypeOption {
     Ref(Ref),
 }
 
-pub trait ObjectType {
+pub trait ObjType {
     fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
     fn to_bytes(&self) -> Vec<u8>;
 
@@ -85,7 +85,7 @@ pub trait ObjectType {
 // Separate trait for serialization/deserialization
 pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
 
-pub struct Obj<T: ObjectType> {
+pub struct Obj<T: ObjType> {
     pub id: u64,
 
     pub saved: bool,   // true if this object has ever been saved to the data store
@@ -94,8 +94,8 @@ pub struct Obj<T: ObjectType> {
     pub data: Box<T>,
 }
 
-impl<T: ObjectType> Obj<T> {
-    // Creates an Obj with any ObjectType implementation
+impl<T: ObjType> Obj<T> {
+    // Creates an Obj with any ObjType implementation
     pub fn new(data_obj: T) -> Self {
         Obj { 
             id: 0,
@@ -105,7 +105,7 @@ impl<T: ObjectType> Obj<T> {
         }
     }
 
-    // Creates an Obj with any ObjectType implementation
+    // Creates an Obj with any ObjType implementation
     pub fn new_from_boxed(data_boxed: Box<T>) -> Self {
         Obj { 
             id: 0,
@@ -119,8 +119,8 @@ impl<T: ObjectType> Obj<T> {
         Ref { id: self.id }
     }
 
-    pub fn make_ref_opt(&self) -> ObjectTypeOption {
-        ObjectTypeOption::Ref(Ref { id: self.id })
+    pub fn make_ref_opt(&self) -> ObjTypeOption {
+        ObjTypeOption::Ref(Ref { id: self.id })
     }
     
     // Creates an Obj from bytes
@@ -187,13 +187,13 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn new_obj<T: ObjectType>(& self, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
+    pub fn new_obj<T: ObjType>(& self, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
         let binding = get_record_store( &self.base_dir );
         let mut record_store = binding.lock().unwrap();
         self.new_obj_rs( &mut record_store, data_obj)
     }
 
-    pub fn new_obj_rs<T: ObjectType>(& self, record_store: &mut RecordStore, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
+    pub fn new_obj_rs<T: ObjType>(& self, record_store: &mut RecordStore, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
         if record_store.current_count() == 0 {
             return Err( RecordStoreError::ObjectStore("new_obj may not be called before root is created".to_string()) );
         }
@@ -218,7 +218,7 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn save_obj<T: ObjectType>(&self,obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
+    pub fn save_obj<T: ObjType>(&self,obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
         if obj.dirty {
             let binding = get_record_store( &self.base_dir );
             let mut record_store = binding.lock().unwrap();
@@ -227,7 +227,7 @@ impl ObjectStore {
         Ok(())
     }
 
-    pub fn save_obj_rs<T: ObjectType>(&self, record_store:&mut RecordStore, obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
+    pub fn save_obj_rs<T: ObjType>(&self, record_store:&mut RecordStore, obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
         if obj.dirty {
             let serialized_bytes = obj.to_bytes();
             let wrapper = SaveWrapper {
@@ -254,13 +254,13 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch<T: ObjectType>(&self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
+    pub fn fetch<T: ObjType>(&self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let binding = get_record_store( &self.base_dir );
         let mut record_store = binding.lock().unwrap();
         self.fetch_rs( &mut record_store, id )
     }
 
-    pub fn fetch_rs<T: ObjectType>(&self, record_store:&mut RecordStore, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
+    pub fn fetch_rs<T: ObjType>(&self, record_store:&mut RecordStore, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let bytes = record_store.fetch( id as usize )?.unwrap();
 //println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
@@ -282,22 +282,22 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch_root(&self) -> Box<Obj<HashMapObjectType>> {
+    pub fn fetch_root(&self) -> Box<Obj<HashMapObjType>> {
         let binding = get_record_store( &self.base_dir );
         let mut record_store = binding.lock().unwrap();
         self.fetch_root_rs( &mut record_store )
     }
 
-    pub fn fetch_root_rs(&self, record_store: &mut RecordStore) -> Box<Obj<HashMapObjectType>> {
+    pub fn fetch_root_rs(&self, record_store: &mut RecordStore) -> Box<Obj<HashMapObjType>> {
         if record_store.current_count() == 0 {
             let _ = record_store.next_id().expect("unable to create root id");
-            let mut new_root = Obj::new(HashMapObjectType::new());
+            let mut new_root = Obj::new(HashMapObjType::new());
             // id is already 0
-            self.save_obj_rs::<HashMapObjectType>( record_store, &mut new_root).expect("unable to save the root");
+            self.save_obj_rs::<HashMapObjType>( record_store, &mut new_root).expect("unable to save the root");
 
             return Box::new(new_root)
         }
-        let hmot: Box<HashMapObjectType> = self.fetch_rs::<HashMapObjectType>(record_store,0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
+        let hmot: Box<HashMapObjType> = self.fetch_rs::<HashMapObjType>(record_store,0).expect("unable to fetch the root").data as Box<HashMapObjType>;
         let root = Obj::new_from_boxed(hmot);
         Box::new(root)
     }
@@ -332,42 +332,47 @@ impl ObjectStore {
 */
 }
 
+//---------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
+/*
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct VecObjectType {
-    vec: Vec<ObjectTypeOption>,
+pub struct VecObjType<T> {
+    vec: Vec<T>,
 }
-impl Serializable for VecObjectType {}
-impl VecObjectType {
+impl VecObjType {
     pub fn new() -> Self {
-        VecObjectType {
+        VecObjType {
             vec: Vec::new()
         }
     }
 }
-pub trait VecObjectTypeExt {
-    fn get(&self, key: usize) -> Option<&ObjectTypeOption>;
+pub trait VecObjTypeExt {
+    fn get(&self, key: usize) -> Option<&ObjTypeOption>;
     fn len(&self) -> usize;
-    fn push(&mut self, val: ObjectTypeOption);
-    fn insert(&mut self, key: usize, val: ObjectTypeOption);
+    fn push(&mut self, val: ObjTypeOption);
+    fn insert(&mut self, key: usize, val: ObjTypeOption);
 }
 
-impl VecObjectTypeExt for Obj<VecObjectType> {
-    fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
+impl VecObjTypeExt for Obj<VecObjType> {
+    fn get(&self, key: usize) -> Option<&ObjTypeOption> {
         self.data.vec.get(key)
     }
-    fn push(&mut self, val: ObjectTypeOption) {
+    fn push(&mut self, val: ObjTypeOption) {
         self.dirty = true;
         self.data.vec.push(val);
     }
     fn len(&self) -> usize {
         self.data.vec.len()
     }
-    fn insert(&mut self, key: usize, val: ObjectTypeOption) {
+    fn insert(&mut self, key: usize, val: ObjTypeOption) {
         self.dirty = true;
         self.data.vec.insert(key, val);
     }
 }
-impl ObjectType for VecObjectType {
+impl ObjType for VecObjType {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -375,44 +380,49 @@ impl ObjectType for VecObjectType {
         bincode::serialize(self).expect("Failed to Serialize")
     }
 
-    fn name() -> String { "VecObjectType".to_string() }
+    fn name() -> String { "VecObjType".to_string() }
 
     fn create_from_bytes(bytes: &[u8]) -> Box<Self> {
         let deserialized: Self = bincode::deserialize(bytes).expect("Failed to deserialize");
         Box::new(deserialized)
     }
 }
+*/
+
+//---------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct HashMapObjectType {
-    pub hashmap: HashMap<String,ObjectTypeOption>
+pub struct HashMapObjType {
+    pub hashmap: HashMap<String,ObjTypeOption>
 }
-impl Serializable for HashMapObjectType {}
-pub trait HashMapObjectTypeExt {
-    fn get(&self, key: &str) -> Option<&ObjectTypeOption>;
-    fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjectTypeOption) -> &ObjectTypeOption;
-    fn put(&mut self, key: &str, val: ObjectTypeOption);
+impl Serializable for HashMapObjType {}
+pub trait HashMapObjTypeExt {
+    fn get(&self, key: &str) -> Option<&ObjTypeOption>;
+    fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjTypeOption) -> &ObjTypeOption;
+    fn put(&mut self, key: &str, val: ObjTypeOption);
 }
-impl HashMapObjectType {
+impl HashMapObjType {
     pub fn new() -> Self {
-        HashMapObjectType {
+        HashMapObjType {
             hashmap: HashMap::new()
         }
     }
 }
-impl HashMapObjectTypeExt for Box<Obj<HashMapObjectType>> {
-    fn get(&self, key: &str) -> Option<&ObjectTypeOption> {
+impl HashMapObjTypeExt for Box<Obj<HashMapObjType>> {
+    fn get(&self, key: &str) -> Option<&ObjTypeOption> {
         self.data.hashmap.get(key)
     }
-    fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjectTypeOption ) -> &ObjectTypeOption {
+    fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjTypeOption ) -> &ObjTypeOption {
         self.data.hashmap.entry(key.to_string()).or_insert_with( || { self.dirty = true; default() } )
     }
-    fn put(&mut self, key: &str, val: ObjectTypeOption) {
+    fn put(&mut self, key: &str, val: ObjTypeOption) {
         self.dirty = true;
         self.data.hashmap.insert(key.to_string(), val);
     }
 }
-impl ObjectType for HashMapObjectType {
+impl ObjType for HashMapObjType {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -420,7 +430,7 @@ impl ObjectType for HashMapObjectType {
         bincode::serialize(self).expect("Failed to Serialize")
     }
 
-    fn name() -> String { "HashMapObjectType".to_string() }
+    fn name() -> String { "HashMapObjType".to_string() }
 
     fn create_from_bytes(bytes: &[u8]) -> Box<Self> {
         let deserialized: Self = bincode::deserialize(bytes).expect("Failed to deserialize");
@@ -428,8 +438,6 @@ impl ObjectType for HashMapObjectType {
     }
 }
 
-
-/*
 
 #[cfg(test)]
 mod tests {
@@ -448,7 +456,7 @@ mod tests {
         }
     }
 
-    impl ObjectType for Canary {
+    impl ObjType for Canary {
         fn name() -> String {
             "canary".to_string()
         }
@@ -471,7 +479,7 @@ mod tests {
 
     }
 
-    impl ObjectType for Root {
+    impl ObjType for Root {
         fn name() -> String {
             "root".to_string()
         }
@@ -509,10 +517,3 @@ mod tests {
 
     }
 }
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Canary {
-    wingspan: i32,
-    name: String,
-}
-*/
