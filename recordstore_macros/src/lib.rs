@@ -101,10 +101,10 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
     // generate lookup_field method, first with ifs  if x == 'foo' {}, if {}
     let ifs = fields.iter().filter_map(|field| {
         if let Some(field_name) = &field.ident {
-            if field_name != "hashmap" && field_name != "vec" {
-                let field_type = &field.ty;
+            let field_type = &field.ty;
+            let cap_type = capitalize_first(&field_type.into_token_stream().to_string());
+            if cap_type == "Bool" || cap_type == "I32" || cap_type == "I64" || cap_type == "U32" || cap_type == "U64" || cap_type == "F32" || cap_type == "F64" {
                 let field_name_str = format!( "{}", field_name );
-                let cap_type = capitalize_first(&field_type.into_token_stream().to_string());
                 let type_ident = Ident::new(&cap_type, proc_macro2::Span::call_site());
                 if cap_type == "String" {
                     Some(quote! {
