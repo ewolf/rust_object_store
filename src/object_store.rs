@@ -34,6 +34,22 @@ use crate::silo::RecordStoreError;
 use recordstore_macros::{init_objects,Getters};
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::{Mutex, OnceLock, Arc};
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Reference {
+    pub id: u64,
+}
+
+impl Reference {
+    pub fn new(id: u64) -> Self {
+        Reference { id }
+    }
+    pub fn load<T: ObjectType>(&self, object_store: &mut ObjectStore) -> Result<Box<Obj<T>>, RecordStoreError> {
+        object_store.fetch( self.id )
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ObjectTypeOption {
@@ -45,11 +61,103 @@ pub enum ObjectTypeOption {
     F32(f32),
     F64(f64),
     String(String),
+    Reference(Reference),
 }
 
-init_objects!();
+//init_objects!();
+use std::any::Any;
+use bincode;
+use serde::{Serialize, Deserialize};
+pub trait ObjectType {
+    fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
+    fn to_bytes(&self) -> Vec<u8>;
+
+    // was object type factory?
+    fn name() -> String;
+    fn create_from_bytes(bytes: &[u8]) -> Box<Self>;
+}
+// Separate trait for serialization/deserialization
+pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
+
+pub struct Obj<T: ObjectType> {
+    pub id: u64,
+
+    pub saved: bool,   // true if this object has ever been saved to the data store
+    pub dirty: bool,   // true if this object needs to be saved to the data store
+
+    pub data: Box<T>,
+}
+
+impl<T: ObjectType> Obj<T> {
+    // Creates an Obj with any ObjectType implementation
+    pub fn new(data_obj: T) -> Self {
+        Obj { 
+            id: 0,
+            saved: false,
+            dirty: true,
+            data: Box::new(data_obj),
+        }
+    }
+
+    // Creates an Obj with any ObjectType implementation
+    pub fn new_from_boxed(data_boxed: Box<T>) -> Self {
+        Obj { 
+            id: 0,
+            saved: false,
+            dirty: true,
+            data: data_boxed,
+        }
+    }
+
+    // Creates an Obj from bytes
+    pub fn from_bytes(bytes: &[u8], id: u64) -> Self {
+        Obj::<T> { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.data.to_bytes()
+    }
+}
+
 /*
-use std::collections::HashMap;
+impl<T: ObjectType> Obj<T> {
+    // Creates an Obj with any ObjectType implementation
+    fn new(data_obj: T) -> Self {
+        Obj { 
+            id: 0,
+            saved: false,
+            dirty: true,
+            data: Box::new(data_obj),
+        }
+    }
+
+    // Creates an Obj with any ObjectType implementation
+    fn new_from_boxed(data_boxed: Box<T>) -> Self {
+        Obj { 
+            id: 0,
+            saved: false,
+            dirty: true,
+            data: data_boxed,
+        }
+    }
+
+    // Creates an Obj from bytes
+    fn from_bytes(bytes: &[u8], id: u64) -> Self {
+        Obj::<T> { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        self.data.to_bytes()
+    }
+}
+*/
+
+
+/*
+// 
+// junk for string -> closure
+//
+//use std::collections::HashMap;
 use std::sync::RwLock;
 use once_cell::sync::Lazy;
 use ctor::ctor;
@@ -96,6 +204,20 @@ struct SaveWrapper<'a> {
     name: &'a str,
     bytes: &'a [u8],
 }
+
+static OBJECT_STORES: OnceLock<Mutex<HashMap<String,Arc<Mutex<ObjectStore>>>>> = OnceLock::new();
+
+pub fn open_object_store( dir: &str ) -> Arc<Mutex<ObjectStore>> {
+    let mutex = OBJECT_STORES.get_or_init(|| {
+        Mutex::new(HashMap::new())
+    });
+    let mut map = mutex.lock().unwrap();
+    map.entry( dir.to_string() )
+        .or_insert_with(|| Arc::new(Mutex::new(ObjectStore::new(dir))))
+        .clone()
+}
+
+
 
 pub struct ObjectStore {
     record_store: RecordStore,
@@ -163,7 +285,7 @@ impl ObjectStore {
             bytes: &serialized_bytes,
         };
         let serialized_bytes = bincode::serialize(&wrapper).unwrap();
-        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
+//        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
         self.record_store.stow( obj.id as usize, &serialized_bytes )?;
         Ok(())
     }
@@ -180,7 +302,7 @@ impl ObjectStore {
     ///
     pub fn fetch<T: ObjectType>(&mut self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let bytes = self.record_store.fetch( id as usize )?.unwrap();
-println!("fetch {} got {} bytes", id, bytes.to_vec().len());
+//println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
         if wrapper.name != T::name() {
             return Err(RecordStoreError::ObjectStore("Error, expected '{T::Name}' and fetched '{wrapper.name}".to_string()));
@@ -209,7 +331,7 @@ println!("fetch {} got {} bytes", id, bytes.to_vec().len());
     ///
     ///
     pub fn fetch_root(&mut self) -> Box<Obj<HashMapObjectType>> {
-        println!( "current count is {}", self.record_store.current_count() );
+//        println!( "current count is {}", self.record_store.current_count() );
         if self.record_store.current_count() == 0 {
             let _ = self.record_store.next_id().expect("unable to create root id");
             let new_root = Obj::new(HashMapObjectType::new());

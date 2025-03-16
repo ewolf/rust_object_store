@@ -101,7 +101,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
     ///
     pub fn open( &mut self ) -> Result<(), RecordStoreError>
     {
-        println!( "Opening silo. is it open already? {}", self.is_open );
+//        println!( "Opening silo. is it open already? {}", self.is_open );
         if self.is_open {
             return Ok(())
         }
@@ -145,7 +145,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
             );
         }
         
-        println!( "silo has {} subsilos", self.subsilos.len() );
+//        println!( "silo has {} subsilos", self.subsilos.len() );
 
         //
         // load subsilo files and make sure there is at least one silo file
@@ -169,7 +169,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Silo<T> {
 
         let silo_size: usize = silo_size_big as usize;
 
-        println!( "silo has size {} and record size is {}", silo_size, self.record_size );
+//        println!( "silo has size {} and record size is {}", silo_size, self.record_size );
 
         self.current_count = silo_size / self.record_size;
         

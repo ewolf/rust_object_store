@@ -23,12 +23,12 @@ pub fn init_objects(_input: TokenStream) -> TokenStream {
 
      // Trait for objects that can be stored dynamically
      pub trait ObjectType {
-         fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
-         fn to_bytes(&self) -> Vec<u8>;
+         pub fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
+         pub fn to_bytes(&self) -> Vec<u8>;
 
          // was object type factory?
-         fn name() -> String;
-         fn create_from_bytes(bytes: &[u8]) -> Box<Self>;
+         pub fn name() -> String;
+         pub fn create_from_bytes(bytes: &[u8]) -> Box<Self>;
      }
 
      // Separate trait for serialization/deserialization
@@ -38,8 +38,8 @@ pub fn init_objects(_input: TokenStream) -> TokenStream {
      pub struct Obj<T: ObjectType> {
          pub id: u64,
 
-         saved: bool,   // true if this object has ever been saved to the data store
-         dirty: bool,   // true if this object needs to be saved to the data store
+         pub saved: bool,   // true if this object has ever been saved to the data store
+         pub dirty: bool,   // true if this object needs to be saved to the data store
 
          pub data: Box<T>,
      }
@@ -127,7 +127,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
         }
     });
     let lookup_field_fun = quote! {
-        fn lookup_field(&self,name: String) -> Option<ObjectTypeOption> {
+        pub fn lookup_field(&self,name: String) -> Option<ObjectTypeOption> {
             #(#ifs)*
             None
         }
@@ -140,7 +140,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
             let getter_name = syn::Ident::new(&format!("get_{}", field_name), field_name.span());
 
             Some(quote! {
-                fn #getter_name(&self) -> &#field_type {
+                pub fn #getter_name(&self) -> &#field_type {
                     &self.data.#field_name
                 }
             })
@@ -155,8 +155,6 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         impl Obj<#struct_name> {
             #(#getters)*
-        }
-        impl Obj<#struct_name> {
             #lookup_field_fun
         }
         impl ObjectType for #struct_name {
