@@ -12,11 +12,54 @@ struct CueStore {
 }
 
 #[derive(Serialize, Deserialize, Getters, Debug)]
-struct Exemplars {
-    cue_store_ref: ObjectTypeOption::Reference<CueStore>,
-    seq_exems_ref: ObjectTypeOption::Reference<Vec<Vec<u32>>>,
-    uniq_exems_ref: ObjectTypeOption::Reference<Vec<Vec<u32>>>,
+struct U32Vec {
+    vec: Vec<u32>,
 }
+impl VecObjectTypeExt for Obj<U32Vec> {
+    fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
+        self.data.vec.get(key)
+    }
+    fn push(&mut self, val: ObjectTypeOption) {
+        self.dirty = true;
+        self.data.vec.push(val);
+    }
+    fn len(&self) -> usize {
+        self.data.vec.len()
+    }
+    fn insert(&mut self, key: usize, val: ObjectTypeOption) {
+        self.dirty = true;
+        self.data.vec.insert(key, val);
+    }
+}
+
+#[derive(Serialize, Deserialize, Getters, Debug)]
+struct U32VecVec {
+    vec: Vec<Ref>,
+}
+impl VecObjectTypeExt for Obj<U32VecVec> {
+    fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
+        self.data.vec.get(key)
+    }
+    fn push(&mut self, val: ObjectTypeOption) {
+        self.dirty = true;
+        self.data.vec.push(val);
+    }
+    fn len(&self) -> usize {
+        self.data.vec.len()
+    }
+    fn insert(&mut self, key: usize, val: ObjectTypeOption) {
+        self.dirty = true;
+        self.data.vec.insert(key, val);
+    }
+}
+
+#[derive(Serialize, Deserialize, Getters, Debug)]
+struct Exemplars {
+    cuestore_ref: Ref,
+    seq_exems_ref: Ref,
+    uniq_exems_ref: Ref,
+}
+
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -29,29 +72,21 @@ fn load_exems(file_name: &str, object_store: ObjectStore)
 
     let mut root = object_store.fetch_root_rs(&mut record_store);
 
-    if let Some(ObjectTypeOption::Reference(exems)) = root.get("exemplars") {
-        let exems = object_store.fetch_rs(&mut record_store, articles_ref.id)?;
-        let uniq_exems = exems.get_uniq_exems();
-        eprintln!( "ALREADY HAVE THE exems {}. id {}", articles.len(), articles_ref.id );
+    if let Some(ObjectTypeOption::Ref(exems_ref)) = root.get("exemplars") {
+        let exems: Exemplars = object_store.fetch_rs(&mut record_store, exems_ref.id)?;
+        let uniq_exems = object_store.fetch_rs(&mut record_store, exems.get_uniq_exems_ref().id )?;
+        eprintln!( "ALREADY HAVE THE exems {}. id {}", uniq_exems.data.len(), exems.id );
 
-        return Ok(articles);
-    }
-
-    let mut articles = object_store
-        .new_obj_rs( &mut record_store, VecObjectType::new() )
-        .expect("articles making problem");
-
-    root.put("articles", ObjectTypeOption::Reference( articles.make_ref()));
-    let _ = object_store.save_obj_rs( &mut record_store, &mut root );
-
-    if let Some(ObjectTypeOption::Reference(articles_ref)) = root.get("articles") {
-        eprintln!( "ROOT PUT THEN GET {}", articles_ref.id );
+        return Ok(exems);
     }
 
     let reader = BufReader::new(File::open(file_name)?);
 
     let mut cues: Vec<String> = Vec::new();
     let mut cue2idx: HashMap<String,u32> = HashMap::new();
+
+    let mut seq_exems_vec: Vec<Ref> = Vec::new();
+    let mut uniq_exems_vec: Vec<Ref> = Vec::new();
 
     let mut needs_title = true;
     let mut title = String::new();
@@ -93,34 +128,51 @@ fn load_exems(file_name: &str, object_store: ObjectStore)
                 }
             }
 
+            let seq_exem = object_store
+                .new_obj_rs( &mut record_store, U32Vec { vec: seq_cue_idxs } )?;
+            
+            seq_exems_vec.push( seq_exem.make_ref() );
+
             let mut uniq_cue_idxs = seq_cue_idxs.clone();
             uniq_cue_idxs.sort_unstable();
             uniq_cue_idxs.dedup();
 
-            let article = object_store
-                .new_obj_rs( &mut record_store, Article { title: title.clone(), 
-                                                          seq_cue_idxs,
-                                                          uniq_cue_idxs,
-                } )?;
-            articles.push( ObjectTypeOption::Reference(article.make_ref()) );
-
+            let uniq_exem = object_store
+                .new_obj_rs( &mut record_store, U32Vec { vec: uniq_cue_idxs } )?;
+            
+            uniq_exems_vec.push( uniq_exem.make_ref() );
 
             needs_title = true;
         }
     }
-    let cuestore = object_store.new_obj_rs( &mut record_store, CueStore { cues, cue2idx } ).expect("cuestore making problem");
-    root.put("cuestore", ObjectTypeOption::Reference( cuestore.make_ref()));
 
+    let cuestore = object_store.new_obj_rs( &mut record_store, 
+                                             CueStore { cues, cue2idx } )?;
+    let seq_exems = object_store.new_obj_rs( &mut record_store, 
+                                              U32VecVec { vec: seq_exems_vec } )?;
+    let uniq_exems = object_store.new_obj_rs( &mut record_store, 
+                                               U32VecVec { vec: uniq_exems_vec } )?;
 
-    let _ = object_store.save_obj_rs( &mut record_store, &mut articles );
-    Ok(articles)
+    let exems = object_store.new_obj_rs( &mut record_store, 
+                                          Exemplars { 
+                                              cuestore_ref: cuestore.make_ref(),
+                                              seq_exems_ref: seq_exems.make_ref(),
+                                              uniq_exems_ref: uniq_exems.make_ref(),
+                                          } )?;
+
+    root.put( "exems", exems.make_ref_opt() );
+
+    let _ = object_store.save_obj_rs( &mut record_store, &mut root );
+    Ok(exems)
 }
 
 fn main() {
 
-    let article_os = ObjectStore::new("./data/articles");
-    let articles = load_articles("./source_data/all_articles.txt", article_os).expect("got articles");
-    eprintln!(" Articles howmany ? {}", articles.len() );
+    let exem_os = ObjectStore::new("./data/exems");
+    
+    let exems = load_exems("./source_data/all_articles.txt", exem_os).expect("got exems");
+    let seq_exems = exem_os.fetch::<U32VecVec>( exems.get_seq_exems_ref().id ).expect("No way");
+    eprintln!(" exems howmany ? {}", seq_exems.data.len() );
 
 
     println!("HI");

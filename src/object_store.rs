@@ -40,13 +40,13 @@ use std::sync::{Mutex, OnceLock, Arc};
 init_objects!();
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Reference {
+pub struct Ref {
     pub id: u64,
 }
 
-impl Reference {
+impl Ref {
     pub fn new(id: u64) -> Self {
-        Reference { id }
+        Ref { id }
     }
     pub fn load<T: ObjectType>(&self, object_store: &mut ObjectStore) -> Result<Box<Obj<T>>, RecordStoreError> {
         object_store.fetch( self.id )
@@ -56,14 +56,21 @@ impl Reference {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ObjectTypeOption {
     Bool(bool),
+    Char(char),
+    I32(i8),
+    I32(i16),
     I32(i32),
     I64(i64),
+    I128(i128),
+    U32(u8),
+    U32(u16),
     U32(u32),
     U64(u64),
+    U128(u128),
     F32(f32),
     F64(f64),
     String(String),
-    Reference(Reference),
+    Ref(Ref),
 }
 
 pub trait ObjectType {
@@ -108,8 +115,12 @@ impl<T: ObjectType> Obj<T> {
         }
     }
 
-    pub fn make_ref(&self) -> Reference {
-        Reference { id: self.id }
+    pub fn make_ref(&self) -> Ref {
+        Ref { id: self.id }
+    }
+
+    pub fn make_ref_opt(&self) -> ObjectTypeOption {
+        ObjectTypeOption::Ref(Ref { id: self.id })
     }
     
     // Creates an Obj from bytes
