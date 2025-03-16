@@ -31,7 +31,7 @@ also if let Some(a) = obj_from_bytes.data.as_any().downcast_ref::<A>()
 //!
 use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
-use recordstore_macros::init_objects;
+use recordstore_macros::{init_objects,Getters};
 
 use std::collections::HashMap;
 
@@ -79,12 +79,12 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn new_obj<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, data_obj: T) -> Result<Box<Obj>,RecordStoreError> {
+    pub fn new_obj<T: ObjectType>(&mut self, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
         if self.record_store.current_count() == 0 {
             return Err( RecordStoreError::ObjectStore("new_obj may not be called before root is created".to_string()) );
         }
         let new_id = self.record_store.next_id()?;
-        let mut new_obj = Obj::new(data_obj);
+        let mut new_obj = Obj::<T>::new(data_obj);
         new_obj.id = new_id as u64;
 
         //  register it here or whatnot
@@ -102,8 +102,8 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn save_obj<T: ObjectType + ObjectTypeFactory>(&mut self,obj: &Obj) -> Result<(),RecordStoreError> {
-        let serialized_bytes = obj.to_bytes::<T>();
+    pub fn save_obj<T: ObjectType>(&mut self,obj: &Obj<T>) -> Result<(),RecordStoreError> {
+        let serialized_bytes = obj.to_bytes();
         let wrapper = SaveWrapper {
             name: &T::name(),
             bytes: &serialized_bytes,
@@ -123,13 +123,13 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, id: u64) -> Result<Box<Obj>, RecordStoreError> {
+    pub fn fetch<T: ObjectType>(&mut self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let bytes = self.record_store.fetch( id as usize )?.unwrap();
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
         if wrapper.name != T::name() {
             return Err(RecordStoreError::ObjectStore("Error, expected '{T::Name}' and fetched '{wrapper.name}".to_string()));
         }
-        let obj = Obj::from_bytes::<T>(&wrapper.bytes, id);
+        let obj = Obj::from_bytes(&wrapper.bytes, id);
         Ok(Box::new(obj))
     }
 
@@ -143,22 +143,20 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch_root(&mut self) -> Box<HashMapObjectType> {
+    pub fn fetch_root(&mut self) -> Box<Obj<HashMapObjectType>> {
         if self.record_store.current_count() == 0 {
             let _ = self.record_store.next_id().expect("unable to create root id");
             let new_root = Obj::new(HashMapObjectType::new());
             // id is already 0
             self.save_obj::<HashMapObjectType>(&new_root).expect("unable to save the root");
 
-            return Ok(Box::new(new_root));
+            return Box::new(new_root)
         }
-        let hmot = self.fetch::<HashMapObjectType>(0).expect("unable to fetch the root").data;
-        match hmot.as_any().downcast_ref::<HashMapObjectType>() {
-            None => panic!("unable to fetch the root"),
-            Some(root) => Box::new(root)
-        }
+        let hmot: Box<HashMapObjectType> = self.fetch::<HashMapObjectType>(0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
+        let root = Obj::new_from_boxed(hmot);
+        Box::new(root)
     }
-
+/*
     ///
     ///
     /// # Arguments
@@ -185,6 +183,7 @@ impl ObjectStore {
     pub fn ensure_path(&mut self, path: &str) {
 
     }
+*/
 }
 
 /*
@@ -287,7 +286,7 @@ pub enum ObjectTypeOption {
     String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Getters)]
 pub struct VecObjectType {
     pub vec: Vec<ObjectTypeOption>
 }
@@ -299,26 +298,16 @@ impl VecObjectType {
     }
 }
 
-impl ObjectType for VecObjectType {
-    fn as_any(&self) -> &dyn Any {
-        self
+impl Obj<VecObjectType> {
+    pub fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
+        self.data.vec.get(key)
     }
-    fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("Failed to Serialize")
-    }
-}
-
-impl Serializable for VecObjectType {}
-
-impl ObjectTypeFactory for VecObjectType {
-    fn name() -> String { "VecObjectType".to_string() }
-    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
-        let deserialized: VecObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
-        Box::new(deserialized)
+    pub fn put(&mut self, key: usize, val: ObjectTypeOption) {
+        self.data.vec.insert(key, val);
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Getters)]
 pub struct HashMapObjectType {
     pub hashmap: HashMap<String,ObjectTypeOption>
 }
@@ -329,23 +318,11 @@ impl HashMapObjectType {
         }
     }
 }
-
-impl ObjectType for HashMapObjectType {
-    fn as_any(&self) -> &dyn Any {
-        self
+impl Obj<HashMapObjectType> {
+    pub fn get(&self, key: String) -> Option<&ObjectTypeOption> {
+        self.data.hashmap.get(&key)
     }
-    fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("Failed to Serialize")
-    }
-}
-
-impl Serializable for HashMapObjectType {}
-
-impl ObjectTypeFactory for HashMapObjectType {
-    fn name() -> String { "HashMapObjectType".to_string() }
-    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
-        let deserialized: HashMapObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
-        Box::new(deserialized)
+    pub fn put(&mut self, key: String, val: ObjectTypeOption) {
+        self.data.hashmap.insert(key, val);
     }
 }
-

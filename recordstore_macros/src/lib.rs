@@ -9,37 +9,34 @@ pub fn init_objects(_input: TokenStream) -> TokenStream {
      use bincode;
 
      use std::any::Any;
-     use std::sync::RwLock;
+     //use std::sync::RwLock;
 
      // Trait for objects that can be stored dynamically
      pub trait ObjectType {
          fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
          fn to_bytes(&self) -> Vec<u8>;
+
+         // was object type factory?
+         fn name() -> String;
+         fn create_from_bytes(bytes: &[u8]) -> Box<Self>;
      }
 
      // Separate trait for serialization/deserialization
      pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
 
-     // Factory trait for creating objects dynamically
-     pub trait ObjectTypeFactory {
-         fn name() -> String;
-         fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType>;
-     }
-
-
      // Struct that stores a `Box<dyn ObjectType>`
-     pub struct Obj {
+     pub struct Obj<T: ObjectType> {
          pub id: u64,
 
          saved: bool,   // true if this object has ever been saved to the data store
          dirty: bool,   // true if this object needs to be saved to the data store
 
-         pub data: Box<dyn ObjectType>,
+         pub data: Box<T>,
      }
 
-     impl Obj {
+     impl<T: ObjectType> Obj<T> {
          // Creates an Obj with any ObjectType implementation
-         fn new<T: ObjectType + ObjectTypeFactory + 'static>(data_obj: T) -> Self {
+         fn new(data_obj: T) -> Self {
              Obj { 
                  id: 0,
                  saved: false,
@@ -48,12 +45,22 @@ pub fn init_objects(_input: TokenStream) -> TokenStream {
              }
          }
 
-         // Creates an Obj from bytes
-         fn from_bytes<T: ObjectType + ObjectTypeFactory + 'static>(bytes: &[u8], id: u64) -> Self {
-             Obj { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
+         // Creates an Obj with any ObjectType implementation
+         fn new_from_boxed(data_boxed: Box<T>) -> Self {
+             Obj { 
+                 id: 0,
+                 saved: false,
+                 dirty: true,
+                 data: data_boxed,
+             }
          }
 
-         fn to_bytes<T: ObjectTypeFactory>(&self) -> Vec<u8> {
+         // Creates an Obj from bytes
+         fn from_bytes(bytes: &[u8], id: u64) -> Self {
+             Obj::<T> { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
+         }
+
+         fn to_bytes(&self) -> Vec<u8> {
              self.data.to_bytes()
          }
      }
@@ -89,7 +96,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
 
             Some(quote! {
                 fn #getter_name(&self) -> &#field_type {
-                    &self.#field_name
+                    &self.data.#field_name
                 }
             })
         } else {
@@ -99,7 +106,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
 
     // Generate the `impl` block
     let expanded = quote! {
-        impl #struct_name {
+        impl Obj<#struct_name> {
             #(#getters)*
         }
         impl ObjectType for #struct_name {
@@ -109,17 +116,17 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
             fn to_bytes(&self) -> Vec<u8> {
                 bincode::serialize(self).expect("Failed to Serialize")
             }
+
+            fn name() -> String { "#struct_name".to_string() }
+
+            fn create_from_bytes(bytes: &[u8]) -> Box<Self> {
+                let deserialized: Self = bincode::deserialize(bytes).expect("Failed to deserialize");
+                Box::new(deserialized)
+            }
         }
 
         impl Serializable for #struct_name {}
 
-        impl ObjectTypeFactory for #struct_name {
-            fn name() -> String { "#struct_name".to_string() }
-            fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
-                let deserialized: #struct_name = bincode::deserialize(bytes).expect("Failed to deserialize");
-                Box::new(deserialized)
-            }
-        }
     };
 
     TokenStream::from(expanded)
