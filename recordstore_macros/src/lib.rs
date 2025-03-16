@@ -17,63 +17,7 @@ pub fn init_objects(_input: TokenStream) -> TokenStream {
     r#"
      use serde::{Serialize, Deserialize};
      use bincode;
-
      use std::any::Any;
-     //use std::sync::RwLock;
-
-     // Trait for objects that can be stored dynamically
-     pub trait ObjectType {
-         pub fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
-         pub fn to_bytes(&self) -> Vec<u8>;
-
-         // was object type factory?
-         pub fn name() -> String;
-         pub fn create_from_bytes(bytes: &[u8]) -> Box<Self>;
-     }
-
-     // Separate trait for serialization/deserialization
-     pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
-
-     // Struct that stores a `Box<dyn ObjectType>`
-     pub struct Obj<T: ObjectType> {
-         pub id: u64,
-
-         pub saved: bool,   // true if this object has ever been saved to the data store
-         pub dirty: bool,   // true if this object needs to be saved to the data store
-
-         pub data: Box<T>,
-     }
-
-     impl<T: ObjectType> Obj<T> {
-         // Creates an Obj with any ObjectType implementation
-         fn new(data_obj: T) -> Self {
-             Obj { 
-                 id: 0,
-                 saved: false,
-                 dirty: true,
-                 data: Box::new(data_obj),
-             }
-         }
-
-         // Creates an Obj with any ObjectType implementation
-         fn new_from_boxed(data_boxed: Box<T>) -> Self {
-             Obj { 
-                 id: 0,
-                 saved: false,
-                 dirty: true,
-                 data: data_boxed,
-             }
-         }
-
-         // Creates an Obj from bytes
-         fn from_bytes(bytes: &[u8], id: u64) -> Self {
-             Obj::<T> { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
-         }
-
-         fn to_bytes(&self) -> Vec<u8> {
-             self.data.to_bytes()
-         }
-     }
     "#.parse().unwrap()
 }
 
