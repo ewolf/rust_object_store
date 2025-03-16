@@ -108,6 +108,10 @@ impl<T: ObjectType> Obj<T> {
         }
     }
 
+    pub fn make_ref(&self) -> Reference {
+        Reference { id: self.id }
+    }
+    
     // Creates an Obj from bytes
     pub fn from_bytes(bytes: &[u8], id: u64) -> Self {
         Obj::<T> { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
