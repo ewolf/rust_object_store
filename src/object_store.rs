@@ -157,6 +157,10 @@ impl ObjectStore {
         ObjectStore { base_dir: base_dir.to_string() }
     }
 
+    pub fn record_store_binding(&self) -> Arc<Mutex<RecordStore>> {
+        get_record_store( &self.base_dir )
+    }
+
     ///
     /// Create a new Obj of the given type
     ///
@@ -171,12 +175,18 @@ impl ObjectStore {
     pub fn new_obj<T: ObjectType>(& self, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
         let binding = get_record_store( &self.base_dir );
         let mut record_store = binding.lock().unwrap();
+        self.new_obj_rs( &mut record_store, data_obj)
+    }
+
+    pub fn new_obj_rs<T: ObjectType>(& self, record_store: &mut RecordStore, data_obj: T) -> Result<Box<Obj<T>>,RecordStoreError> {
         if record_store.current_count() == 0 {
             return Err( RecordStoreError::ObjectStore("new_obj may not be called before root is created".to_string()) );
         }
         let new_id = record_store.next_id()?;
         let mut new_obj = Obj::<T>::new(data_obj);
         new_obj.id = new_id as u64;
+
+        self.save_obj_rs( record_store, &mut new_obj )?;
 
         //  register it here or whatnot
 
@@ -197,12 +207,12 @@ impl ObjectStore {
         if obj.dirty {
             let binding = get_record_store( &self.base_dir );
             let mut record_store = binding.lock().unwrap();
-            let _ = self._save_obj( &mut record_store, obj );
+            let _ = self.save_obj_rs( &mut record_store, obj );
         }
         Ok(())
     }
 
-    pub fn _save_obj<T: ObjectType>(&self, record_store:&mut RecordStore, obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
+    pub fn save_obj_rs<T: ObjectType>(&self, record_store:&mut RecordStore, obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
         if obj.dirty {
             let serialized_bytes = obj.to_bytes();
             let wrapper = SaveWrapper {
@@ -210,9 +220,11 @@ impl ObjectStore {
                 bytes: &serialized_bytes,
             };
             let serialized_bytes = bincode::serialize(&wrapper).unwrap();
-            //        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
+            eprintln!( "SAVE ID {}, Got bytes {}", obj.id, serialized_bytes.to_vec().len() );
             record_store.stow( obj.id as usize, &serialized_bytes )?;
             obj.dirty = false;
+        } else {
+            eprintln!( "NOT DIRTY ID {}", obj.id );
         }
         Ok(())
     }
@@ -230,10 +242,10 @@ impl ObjectStore {
     pub fn fetch<T: ObjectType>(&self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let binding = get_record_store( &self.base_dir );
         let mut record_store = binding.lock().unwrap();
-        self._fetch( &mut record_store, id )
+        self.fetch_rs( &mut record_store, id )
     }
 
-    pub fn _fetch<T: ObjectType>(&self, record_store:&mut RecordStore, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
+    pub fn fetch_rs<T: ObjectType>(&self, record_store:&mut RecordStore, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let bytes = record_store.fetch( id as usize )?.unwrap();
 //println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
@@ -258,19 +270,23 @@ impl ObjectStore {
     pub fn fetch_root(&self) -> Box<Obj<HashMapObjectType>> {
         let binding = get_record_store( &self.base_dir );
         let mut record_store = binding.lock().unwrap();
-        //        println!( "current count is {}", record_store.current_count() );
+        self.fetch_root_rs( &mut record_store )
+    }
+
+    pub fn fetch_root_rs(&self, record_store: &mut RecordStore) -> Box<Obj<HashMapObjectType>> {
         if record_store.current_count() == 0 {
             let _ = record_store.next_id().expect("unable to create root id");
             let mut new_root = Obj::new(HashMapObjectType::new());
             // id is already 0
-            self._save_obj::<HashMapObjectType>(&mut record_store, &mut new_root).expect("unable to save the root");
+            self.save_obj_rs::<HashMapObjectType>( record_store, &mut new_root).expect("unable to save the root");
 
             return Box::new(new_root)
         }
-        let hmot: Box<HashMapObjectType> = self._fetch::<HashMapObjectType>(&mut record_store,0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
+        let hmot: Box<HashMapObjectType> = self.fetch_rs::<HashMapObjectType>(record_store,0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
         let root = Obj::new_from_boxed(hmot);
         Box::new(root)
     }
+
 /*
     ///
     ///
@@ -315,14 +331,24 @@ impl VecObjectType {
 }
 pub trait VecObjectTypeExt {
     fn get(&self, key: usize) -> Option<&ObjectTypeOption>;
-    fn put(&mut self, key: usize, val: ObjectTypeOption);
+    fn len(&self) -> usize;
+    fn push(&mut self, val: ObjectTypeOption);
+    fn insert(&mut self, key: usize, val: ObjectTypeOption);
 }
 
 impl VecObjectTypeExt for Obj<VecObjectType> {
     fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
         self.data.vec.get(key)
     }
-    fn put(&mut self, key: usize, val: ObjectTypeOption) {
+    fn push(&mut self, val: ObjectTypeOption) {
+        self.dirty = true;
+        self.data.vec.push(val);
+    }
+    fn len(&self) -> usize {
+        self.data.vec.len()
+    }
+    fn insert(&mut self, key: usize, val: ObjectTypeOption) {
+        self.dirty = true;
         self.data.vec.insert(key, val);
     }
 }
@@ -364,9 +390,10 @@ impl HashMapObjectTypeExt for Box<Obj<HashMapObjectType>> {
         self.data.hashmap.get(key)
     }
     fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjectTypeOption ) -> &ObjectTypeOption {
-        self.data.hashmap.entry(key.to_string()).or_insert_with( default )
+        self.data.hashmap.entry(key.to_string()).or_insert_with( || { self.dirty = true; default() } )
     }
     fn put(&mut self, key: &str, val: ObjectTypeOption) {
+        self.dirty = true;
         self.data.hashmap.insert(key.to_string(), val);
     }
 }

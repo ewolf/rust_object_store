@@ -83,11 +83,16 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
         if let Some(field_name) = &field.ident {
             let field_type = &field.ty;
             let getter_name = syn::Ident::new(&format!("get_{}", field_name), Span::call_site());
+            let setter_name = syn::Ident::new(&format!("set_{}", field_name), Span::call_site());
 
             Some(quote! {
                 fn #getter_name(&self) -> &#field_type {
                     let data:& #struct_name = self.data.as_any().downcast_ref::<#struct_name>().expect("unable to downcast");
                     &data.#field_name
+                }
+                fn #setter_name(&mut self,val: #field_type) {
+                    self.dirty = true;
+                    self.data.#field_name = val;
                 }
             })
         } else {
@@ -100,9 +105,11 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
         if let Some(field_name) = &field.ident {
             let field_type = &field.ty;
             let getter_name = syn::Ident::new(&format!("get_{}", field_name), Span::call_site());
+            let setter_name = syn::Ident::new(&format!("set_{}", field_name), Span::call_site());
 
             Some(quote! {
                 fn #getter_name(&self) -> &#field_type;
+                fn #setter_name(&mut self,val: #field_type);
             })
         } else {
             None
