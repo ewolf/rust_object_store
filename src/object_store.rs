@@ -1,6 +1,11 @@
 /*
  TODO:
     
+  * start with writing the driver and learn what is gonna be
+    needed in the object_store api
+
+  * make sql version of the record store
+
   *  write tests with the Getters macro
 
   *  rename Getters macro to Obj or something
@@ -24,83 +29,11 @@
 //!
 use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
+use recordstore_macros::init_objects;
 
-use serde::{Serialize, Deserialize};
-use bincode;
-
-use lazy_static::lazy_static;
-
-use std::any::Any;
 use std::collections::HashMap;
-use std::sync::RwLock;
-use ctor::ctor;
 
-// Type alias for factory functions
-type FactoryFn = fn() -> Box<dyn ObjectType + Send + Sync>;
-
-// Global registry for struct creation
-lazy_static! {
-    static ref REGISTRY: RwLock<HashMap<String, FactoryFn>> = RwLock::new({
-        HashMap::new()
-    });
-}
-// Function to register new structs at runtime
-fn register_struct(name: &str, constructor: FactoryFn) {
-    let mut registry = REGISTRY.write().unwrap();
-    registry.insert(name.to_string(), constructor);
-}
-
-
-// Trait for objects that can be stored dynamically
-pub trait ObjectType {
-    fn as_any(&self) -> &dyn Any; // Allows downcasting if needed
-    fn to_bytes(&self) -> Vec<u8>;
-}
-
-// Separate trait for serialization/deserialization
-pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
-
-// Factory trait for creating objects dynamically
-pub trait ObjectTypeFactory {
-    fn name() -> String;
-    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType>;
-}
-
-//
-// WOLF - should this be a trait and the ObjectTypes have these fields
-//        in addition to their own? I'm not sure
-//
-// Struct that stores a `Box<dyn ObjectType>`
-pub struct Obj {
-    pub id: u64,
-
-    saved: bool,   // true if this object has ever been saved to the data store
-    dirty: bool,   // true if this object needs to be saved to the data store
-
-    data: Box<dyn ObjectType>,
-}
-
-impl Obj {
-    // Creates an Obj with any ObjectType implementation
-    fn new<T: ObjectType + ObjectTypeFactory + 'static>(data_obj: T) -> Self {
-        Obj { 
-            id: 0,
-            saved: false,
-            dirty: true,
-            data: Box::new(data_obj),
-        }
-    }
-
-    // Creates an Obj from bytes
-    fn from_bytes<T: ObjectType + ObjectTypeFactory + 'static>(bytes: &[u8]) -> Self {
-        Obj { id:0, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
-    }
-
-    fn to_bytes<T: ObjectTypeFactory>(&self) -> Vec<u8> {
-        self.data.to_bytes()
-    }
-}
-
+init_objects!();
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct SaveWrapper<'a> {
@@ -188,17 +121,16 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, id: usize) -> Result<Box<Obj>, RecordStoreError> {
-        let bytes = self.record_store.fetch( id )?.unwrap();
+    pub fn fetch<T: ObjectType + ObjectTypeFactory + 'static>(&mut self, id: u64) -> Result<Box<Obj>, RecordStoreError> {
+        let bytes = self.record_store.fetch( id as usize )?.unwrap();
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
         if wrapper.name != T::name() {
             return Err(RecordStoreError::ObjectStore("Error, expected '{T::Name}' and fetched '{wrapper.name}".to_string()));
         }
-        let obj = Obj::from_bytes::<T>(&wrapper.bytes);
+        let obj = Obj::from_bytes::<T>(&wrapper.bytes, id);
         Ok(Box::new(obj))
     }
 
-/*
     ///
     ///
     /// # Arguments
@@ -209,29 +141,19 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn fetch_root<T: ObjectType>(&mut self) -> Result<Box<Obj>,RecordStoreError> {
+    pub fn fetch_root(&mut self) -> Result<Box<Obj>,RecordStoreError> {
         if self.record_store.current_count() == 0 {
             let _ = self.record_store.next_id()?;
-            let new_root = Obj::new();
-            self.save_obj(&new_root)?;
+            let new_root = Obj::new(HashMapObjectType::new());
+            // id is already 0
+            self.save_obj::<HashMapObjectType>(&new_root)?;
 
             return Ok(Box::new(new_root));
         }
-        Ok(self.fetch(0)?)
+        Ok(self.fetch::<HashMapObjectType>(0)?)
     }
-    ///
-    ///
-    /// # Arguments
-    ///
-    ///
-    ///
-    /// # Returns
-    ///
-    ///
-    ///
-    pub fn save(&mut self) {
 
-    }
+/*
     ///
     ///
     /// # Arguments
@@ -261,41 +183,6 @@ impl ObjectStore {
 */
 }
 
-/*
-    ///
-    /// Mark the data in this object as needing a save.
-    ///
-    pub fn dirty(&self) {
-        //let DIRTY_CACHE: Arc<Mutex<HashMap<u64, Box<Obj<dyn Saveable>>>>> = Arc::new(Mutex::new(HashMap::new()));
-        //        let mut cache = DIRTY_CACHE.lock().unwrap();
-        //        cache.insert( self.id, Box::new(|| bincode::serialize(&self.data).unwrap().to_vec()) );
-
-    }
-    
-    /// Construct an object given an array of bytes.
-    ///
-    /// # Arguments
-    ///
-    /// * bytes - an array of bytes.
-    ///
-    /// # Returns
-    ///
-    /// * Ok(Obj<T>) - the constructed object
-    /// * Err(RecordStoreError::ObjectStore) - the bytes indicate a different data type than the Obj's type.
-    ///
-    pub fn load(bytes: &[u8]) -> Result<Obj<T>,RecordStoreError> {
-        let data_obj = T::load(bytes)?;
-        Ok(Obj {
-            id: 0,
-            saved: true,
-            dirty: false,
-            data: data_obj,
-        })
-    }
-
-}
-
-
 
 #[cfg(test)]
 mod tests {
@@ -307,7 +194,7 @@ mod tests {
         wingspan: i32,
         name: String,
     }
-
+/*
     impl Canary {
         fn new_default() -> Self {
             Canary { wingspan: 12, name: "Beaux".to_string() }
@@ -331,12 +218,12 @@ mod tests {
             Ok(Box::new( canary ))
         }
     }
-
+*/
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     struct Root {
 
     }
-
+/*
     impl ObjectType for Root {
         fn name() -> String {
             "root".to_string()
@@ -353,7 +240,7 @@ mod tests {
             Ok(Box::new( root ))
         }
     }
-
+*/
     #[test]
     fn object_store() {
         let testdir = TempDir::new().expect("coult not open testdir");
@@ -377,40 +264,14 @@ mod tests {
     }
 }
 
-*/
-
-
 #[derive(Serialize, Deserialize, Debug)]
 struct Canary {
     wingspan: i32,
     name: String,
 }
-impl ObjectType for Canary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("Failed to Serialize")
-    }
-}
-
-impl Serializable for Canary {}
-
-impl ObjectTypeFactory for Canary {
-    fn name() -> String { "Canary".to_string() }
-    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
-        let deserialized: Canary = bincode::deserialize(bytes).expect("Failed to deserialize");
-        Box::new(deserialized)
-    }
-}
-
-#[ctor]
-fn register_Canary() {
-    register_struct("Canary", || Box::new( Canary { name: "BANSO".to_string(), wingspan: 66 } ) );
-}
 
 #[derive(Serialize, Deserialize, Debug)]
-enum VecObjectTypeOption {
+enum ObjectTypeOption {
     Bool,
     I32,
     I64,
@@ -423,10 +284,10 @@ enum VecObjectTypeOption {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct VecObjectType {
-    vec: Vec<VecObjectTypeOption>
+    vec: Vec<ObjectTypeOption>
 }
 impl VecObjectType {
-    pub fn new(opt: VecObjectTypeOption) -> Self {
+    pub fn new() -> Self {
         VecObjectType {
             vec: Vec::new()
         }
@@ -446,8 +307,39 @@ impl Serializable for VecObjectType {}
 
 impl ObjectTypeFactory for VecObjectType {
     fn name() -> String { "VecObjectType".to_string() }
-    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
+    fn create_from_bytes(bytes: &[u8], id: u64) -> Box<dyn ObjectType> {
         let deserialized: VecObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
+        Box::new(deserialized)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct HashMapObjectType {
+    hashmap: HashMap<String,ObjectTypeOption>
+}
+impl HashMapObjectType {
+    pub fn new() -> Self {
+        HashMapObjectType {
+            hashmap: HashMap::new()
+        }
+    }
+}
+
+impl ObjectType for HashMapObjectType {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("Failed to Serialize")
+    }
+}
+
+impl Serializable for HashMapObjectType {}
+
+impl ObjectTypeFactory for HashMapObjectType {
+    fn name() -> String { "HashMapObjectType".to_string() }
+    fn create_from_bytes(bytes: &[u8], id: u64) -> Box<dyn ObjectType> {
+        let deserialized: HashMapObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
         Box::new(deserialized)
     }
 }
