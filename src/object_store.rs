@@ -33,6 +33,7 @@ use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
 
 use std::collections::HashMap;
+
 use std::sync::{Mutex, OnceLock, Arc};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -507,8 +508,8 @@ pub struct HashMapObjectType {
 }
 impl Serializable for HashMapObjectType {}
 pub trait HashMapObjectTypeExt {
-    fn get(&self, key: String) -> Option<&ObjectTypeOption>;
-    fn put(&mut self, key: String, val: ObjectTypeOption);
+    fn get(&self, key: &str) -> Option<&ObjectTypeOption>;
+    fn put(&mut self, key: &str, val: ObjectTypeOption);
 }
 impl HashMapObjectType {
     pub fn new() -> Self {
@@ -518,11 +519,11 @@ impl HashMapObjectType {
     }
 }
 impl HashMapObjectTypeExt for Box<Obj<HashMapObjectType>> {
-    fn get(&self, key: String) -> Option<&ObjectTypeOption> {
-        self.data.hashmap.get(&key)
+    fn get(&self, key: &str) -> Option<&ObjectTypeOption> {
+        self.data.hashmap.get(key)
     }
-    fn put(&mut self, key: String, val: ObjectTypeOption) {
-        self.data.hashmap.insert(key, val);
+    fn put(&mut self, key: &str, val: ObjectTypeOption) {
+        self.data.hashmap.insert(key.to_string(), val);
     }
 }
 impl ObjectType for HashMapObjectType {
