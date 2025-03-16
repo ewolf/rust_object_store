@@ -109,6 +109,7 @@ impl ObjectStore {
             bytes: &serialized_bytes,
         };
         let serialized_bytes = bincode::serialize(&wrapper).unwrap();
+        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
         self.record_store.stow( obj.id as usize, &serialized_bytes )?;
         Ok(())
     }
@@ -125,6 +126,7 @@ impl ObjectStore {
     ///
     pub fn fetch<T: ObjectType>(&mut self, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let bytes = self.record_store.fetch( id as usize )?.unwrap();
+println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
         if wrapper.name != T::name() {
             return Err(RecordStoreError::ObjectStore("Error, expected '{T::Name}' and fetched '{wrapper.name}".to_string()));
@@ -144,6 +146,7 @@ impl ObjectStore {
     ///
     ///
     pub fn fetch_root(&mut self) -> Box<Obj<HashMapObjectType>> {
+        println!( "current count is {}", self.record_store.current_count() );
         if self.record_store.current_count() == 0 {
             let _ = self.record_store.next_id().expect("unable to create root id");
             let new_root = Obj::new(HashMapObjectType::new());

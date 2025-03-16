@@ -102,6 +102,7 @@ impl RecordStore {
     /// * usize - number of records in this record store.
     /// 
     pub fn current_count(&mut self) -> usize {
+        let _ = self.index_silo.open();        
         self.index_silo.current_count
     }
 
