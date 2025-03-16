@@ -220,11 +220,11 @@ impl ObjectStore {
                 bytes: &serialized_bytes,
             };
             let serialized_bytes = bincode::serialize(&wrapper).unwrap();
-            eprintln!( "SAVE ID {}, Got bytes {}", obj.id, serialized_bytes.to_vec().len() );
+//            eprintln!( "SAVE ID {}, Got bytes {}", obj.id, serialized_bytes.to_vec().len() );
             record_store.stow( obj.id as usize, &serialized_bytes )?;
             obj.dirty = false;
-        } else {
-            eprintln!( "NOT DIRTY ID {}", obj.id );
+//        } else {
+//            eprintln!( "NOT DIRTY ID {}", obj.id );
         }
         Ok(())
     }
