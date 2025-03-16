@@ -20,6 +20,8 @@
 
   * Create Root
 
+also if let Some(a) = obj_from_bytes.data.as_any().downcast_ref::<A>()
+
 */
 
 
@@ -153,7 +155,6 @@ impl ObjectStore {
         Ok(self.fetch::<HashMapObjectType>(0)?)
     }
 
-/*
     ///
     ///
     /// # Arguments
@@ -180,21 +181,21 @@ impl ObjectStore {
     pub fn ensure_path(&mut self, path: &str) {
 
     }
-*/
 }
 
+/*
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     #[derive(Getters)]
     struct Canary {
         wingspan: i32,
         name: String,
     }
-/*
     impl Canary {
         fn new_default() -> Self {
             Canary { wingspan: 12, name: "Beaux".to_string() }
@@ -218,12 +219,12 @@ mod tests {
             Ok(Box::new( canary ))
         }
     }
-*/
+
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     struct Root {
 
     }
-/*
+
     impl ObjectType for Root {
         fn name() -> String {
             "root".to_string()
@@ -240,7 +241,6 @@ mod tests {
             Ok(Box::new( root ))
         }
     }
-*/
     #[test]
     fn object_store() {
         let testdir = TempDir::new().expect("coult not open testdir");
@@ -269,9 +269,10 @@ struct Canary {
     wingspan: i32,
     name: String,
 }
+*/
 
 #[derive(Serialize, Deserialize, Debug)]
-enum ObjectTypeOption {
+pub enum ObjectTypeOption {
     Bool,
     I32,
     I64,
@@ -283,8 +284,8 @@ enum ObjectTypeOption {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct VecObjectType {
-    vec: Vec<ObjectTypeOption>
+pub struct VecObjectType {
+    pub vec: Vec<ObjectTypeOption>
 }
 impl VecObjectType {
     pub fn new() -> Self {
@@ -307,15 +308,15 @@ impl Serializable for VecObjectType {}
 
 impl ObjectTypeFactory for VecObjectType {
     fn name() -> String { "VecObjectType".to_string() }
-    fn create_from_bytes(bytes: &[u8], id: u64) -> Box<dyn ObjectType> {
+    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
         let deserialized: VecObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
         Box::new(deserialized)
     }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct HashMapObjectType {
-    hashmap: HashMap<String,ObjectTypeOption>
+pub struct HashMapObjectType {
+    pub hashmap: HashMap<String,ObjectTypeOption>
 }
 impl HashMapObjectType {
     pub fn new() -> Self {
@@ -338,7 +339,7 @@ impl Serializable for HashMapObjectType {}
 
 impl ObjectTypeFactory for HashMapObjectType {
     fn name() -> String { "HashMapObjectType".to_string() }
-    fn create_from_bytes(bytes: &[u8], id: u64) -> Box<dyn ObjectType> {
+    fn create_from_bytes(bytes: &[u8]) -> Box<dyn ObjectType> {
         let deserialized: HashMapObjectType = bincode::deserialize(bytes).expect("Failed to deserialize");
         Box::new(deserialized)
     }
