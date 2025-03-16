@@ -48,7 +48,9 @@ impl Ref {
     pub fn new(id: u64) -> Self {
         Ref { id }
     }
-    pub fn load<T: ObjType>(&self, object_store: &mut ObjectStore) -> Result<Box<Obj<T>>, RecordStoreError> {
+    pub fn load<T: ObjType>(&self, object_store: &mut ObjectStore)
+                            -> Result<Box<Obj<T>>, RecordStoreError> 
+    {
         object_store.fetch( self.id )
     }
 }
@@ -88,30 +90,31 @@ pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
 pub struct Obj<T: ObjType> {
     pub id: u64,
 
-    pub saved: bool,   // true if this object has ever been saved to the data store
     pub dirty: bool,   // true if this object needs to be saved to the data store
 
     pub data: Box<T>,
+
+    pub object_store: ObjectStore,
 }
 
 impl<T: ObjType> Obj<T> {
     // Creates an Obj with any ObjType implementation
-    pub fn new(data_obj: T) -> Self {
+    pub fn new(data_obj: T, object_store: &ObjectStore) -> Self {
         Obj { 
             id: 0,
-            saved: false,
             dirty: true,
             data: Box::new(data_obj),
+            object_store: object_store.clone(),
         }
     }
 
     // Creates an Obj with any ObjType implementation
-    pub fn new_from_boxed(data_boxed: Box<T>) -> Self {
+    pub fn new_from_boxed(data_boxed: Box<T>, object_store: &ObjectStore) -> Self {
         Obj { 
             id: 0,
-            saved: false,
             dirty: true,
             data: data_boxed,
+            object_store: object_store.clone(),
         }
     }
 
@@ -124,8 +127,12 @@ impl<T: ObjType> Obj<T> {
     }
     
     // Creates an Obj from bytes
-    pub fn from_bytes(bytes: &[u8], id: u64) -> Self {
-        Obj::<T> { id, saved: false, dirty: true, data: T::create_from_bytes(bytes) }
+    pub fn from_bytes(bytes: &[u8], id: u64, object_store: &ObjectStore) -> Self {
+        Obj::<T> { id, 
+                   dirty: true, 
+                   data: T::create_from_bytes(bytes),
+                   object_store: object_store.clone(),
+        }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -162,10 +169,11 @@ fn get_record_store( dir: &str ) -> Arc<Mutex<RecordStore>> {
         .clone()
 }
 
-
+#[derive(Clone)]
 pub struct ObjectStore {
     base_dir: String,
 }
+
 
 impl ObjectStore {
 
@@ -209,10 +217,8 @@ impl ObjectStore {
             return Err( RecordStoreError::ObjectStore("new_obj may not be called before root is created".to_string()) );
         }
         let new_id = record_store.next_id()?;
-        let mut new_obj = Obj::<T>::new(data_obj);
+        let mut new_obj = Obj::<T>::new(data_obj, self);
         new_obj.id = new_id as u64;
-
-        self.save_obj_rs( record_store, &mut new_obj )?;
 
         //  register it here or whatnot
 
@@ -246,7 +252,7 @@ impl ObjectStore {
                 bytes: &serialized_bytes,
             };
             let serialized_bytes = bincode::serialize(&wrapper).unwrap();
-//            eprintln!( "SAVE ID {}, Got bytes {}", obj.id, serialized_bytes.to_vec().len() );
+            eprintln!( "SAVE ID {}, Got bytes {}", obj.id, serialized_bytes.to_vec().len() );
             record_store.stow( obj.id as usize, &serialized_bytes )?;
             obj.dirty = false;
 //        } else {
@@ -273,12 +279,12 @@ impl ObjectStore {
 
     pub fn fetch_rs<T: ObjType>(&self, record_store:&mut RecordStore, id: u64) -> Result<Box<Obj<T>>, RecordStoreError> {
         let bytes = record_store.fetch( id as usize )?.unwrap();
-//println!("fetch {} got {} bytes", id, bytes.to_vec().len());
+println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
         if wrapper.name != T::name() {
-            return Err(RecordStoreError::ObjectStore("Error, expected '{T::Name}' and fetched '{wrapper.name}".to_string()));
+            return Err(RecordStoreError::ObjectStore(format!("Error, expected '{}' and fetched '{}", T::name(), wrapper.name).to_string()));
         }
-        let obj = Obj::from_bytes(&wrapper.bytes, id);
+        let obj = Obj::from_bytes(&wrapper.bytes, id, self);
         Ok(Box::new(obj))
     }
 
@@ -299,17 +305,21 @@ impl ObjectStore {
         self.fetch_root_rs( &mut record_store )
     }
 
-    pub fn fetch_root_rs(&self, record_store: &mut RecordStore) -> Box<Obj<HashMapObjType>> {
+    pub fn fetch_root_rs(&self, record_store: &mut RecordStore)
+                         -> Box<Obj<HashMapObjType>> 
+    {
         if record_store.current_count() == 0 {
             let _ = record_store.next_id().expect("unable to create root id");
-            let mut new_root = Obj::new(HashMapObjType::new());
+            let mut new_root = Obj::new(HashMapObjType::new(), self);
             // id is already 0
             self.save_obj_rs::<HashMapObjType>( record_store, &mut new_root).expect("unable to save the root");
 
             return Box::new(new_root)
         }
-        let hmot: Box<HashMapObjType> = self.fetch_rs::<HashMapObjType>(record_store,0).expect("unable to fetch the root").data as Box<HashMapObjType>;
-        let root = Obj::new_from_boxed(hmot);
+        let hmot: Box<HashMapObjType> = self.fetch_rs::<HashMapObjType>(record_store,0)
+            .expect("unable to fetch the root")
+            .data as Box<HashMapObjType>;
+        let root = Obj::new_from_boxed(hmot, self);
         Box::new(root)
     }
 
@@ -342,6 +352,7 @@ impl ObjectStore {
     }
 */
 }
+
 
 //---------------------------------------------------------------------------------
 //---------------------------------------------------------------------------------
@@ -409,6 +420,8 @@ pub struct HashMapObjType {
     pub hashmap: HashMap<String,ObjTypeOption>
 }
 impl Serializable for HashMapObjType {}
+
+// 
 pub trait HashMapObjTypeExt {
     fn get(&self, key: &str) -> Option<&ObjTypeOption>;
     fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjTypeOption) -> &ObjTypeOption;
@@ -454,6 +467,7 @@ impl ObjType for HashMapObjType {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use recordstore_macros::*;
 
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
     #[derive(Getters)]
@@ -461,70 +475,50 @@ mod tests {
         wingspan: i32,
         name: String,
     }
-    impl Canary {
-        fn new_default() -> Self {
-            Canary { wingspan: 12, name: "Beaux".to_string() }
-        }
-    }
-
-    impl ObjType for Canary {
-        fn name() -> String {
-            "canary".to_string()
-        }
-        fn new() -> Box<Canary> {
-            Box::new(Canary { is_alive: true, wingspan: 3 })
-        }
-//        fn bytes() -> Vec<u8> {}
-        fn load(bytes: &[u8]) -> Result<Box<Canary>,RecordStoreError> {
-            let wrapper: SaveWrapper = bincode::deserialize(bytes).expect("canary load failed");
-            if wrapper.name != "canary" {
-                return Err( RecordStoreError::ObjectStore("Error, tried to load canary and got {wrapper.name}".to_string()) )
-            }
-            let canary: Canary = bincode::deserialize(wrapper.bytes).expect("canary load failed");
-            Ok(Box::new( canary ))
-        }
-    }
 
     #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+    #[derive(Getters)]
     struct Root {
-
     }
 
-    impl ObjType for Root {
-        fn name() -> String {
-            "root".to_string()
-        }
-        fn new() -> Box<Root> {
-            Box::new(Root {})
-        }
-        fn load(bytes: &[u8]) -> Result<Box<Root>,RecordStoreError> {
-            let wrapper: SaveWrapper = bincode::deserialize(bytes).expect("root load failed");
-            if wrapper.name.to_string() != "root".to_string() {
-                return Err( RecordStoreError::ObjectStore("tried to load root and got {wrapper.name}".to_string()) );
-            }
-            let root: Root = bincode::deserialize(wrapper.bytes).expect("root load failed");
-            Ok(Box::new( root ))
-        }
-    }
     #[test]
     fn object_store() {
         let testdir = TempDir::new().expect("coult not open testdir");
         let testdir_path = testdir.path().to_string_lossy().to_string();
-        let mut os: ObjectStore = ObjectStore::new( &testdir_path );
-        match os.new_obj::<Canary>() {
+        let os: ObjectStore = ObjectStore::new( &testdir_path );
+        match os.new_obj( Canary { wingspan: 13, name: "bunbun".to_string() } ) {
             Ok(_thing) => panic!("allowed an object to be created before the root was"),
             Err(err) => assert_eq!( err.to_string(), "An object store error occurred: new_obj may not be called before root is created" )
         }
 
-        let root = os.fetch_root::<Root>().unwrap();
+        let mut root = os.fetch_root();
         assert_eq!( root.id, 0 );
+        assert_eq!( root.dirty, false );
 
+        let mut canary = os.new_obj( Canary { wingspan: 3, name: "bobo".to_string() } ).expect("new");
 
-        let canary = os.new_obj::<Canary>().unwrap();
+        root.put( "canary", canary.make_ref_opt() );
+
+        assert_eq!( root.dirty, true );
+
+        let _ = os.save_obj( &mut root );
+
+        assert_eq!( root.dirty, false );
+        
         assert_eq!( canary.id, 1 );
-        assert_eq!( canary.saved, false );
         assert_eq!( canary.dirty, true );
-        assert_eq!( canary.data.wingspan, 3 );
+        assert_eq!( canary.get_wingspan(), &3 );
 
+        canary.set_wingspan( 4 );
+
+        // update
+        assert_eq!( canary.dirty, true );
+        assert_eq!( canary.get_wingspan(), &4 );
+
+        let _ = os.save_obj( &mut canary );
+        assert_eq!( canary.dirty, false );
+
+        let canary = os.fetch::<Canary>( 1 ).expect("loady");
+        assert_eq!( canary.get_wingspan(), &4 );
     }
 }

@@ -3,16 +3,15 @@ use recordstore_macros::*;
 use yote_recordstore_rust::silo::RecordStoreError;
 
 use regex::Regex;
-extern crate trpl;
-use tokio::sync::{mpsc, Semaphore, SemaphorePermit};
 
-use std::collections::HashMap;
+use statrs::statistics::Statistics;
+
 use std::{
-    future::Future,
+    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
-    pin::{pin,Pin},
-    sync::Arc,
+    sync::{mpsc,Arc},
+    thread,
 };
 
 init_objects!();
@@ -36,6 +35,11 @@ struct Config {
 }
 
 #[derive(Serialize, Deserialize, Getters, Debug)]
+pub struct RefVec {
+    vec: Vec<Ref>,
+}
+
+#[derive(Serialize, Deserialize, Getters, Debug)]
 struct CueStore {
     cues: Vec<String>,
     cue2idx: HashMap<String,u32>,
@@ -52,8 +56,8 @@ struct U32HashMap {
 }
 
 #[derive(Serialize, Deserialize, Getters, Debug)]
-struct RefVec {
-    vec: Vec<Ref>,
+struct U32F32HashMap {
+    hash: HashMap<u32,f32>,
 }
 
 #[derive(Serialize, Deserialize, Getters, Debug)]
@@ -88,16 +92,17 @@ fn load_exems(file_name: &str, object_store: &ObjectStore, config: &Config)
 
     if let Some(ObjTypeOption::Ref(exems_ref)) = root.get("exems") {
         let exems = object_store.fetch_rs(&mut record_store, exems_ref.id)?;
-        let glo_uniq_exems = object_store.fetch_rs::<RefVec>(&mut record_store, exems.get_glo_uniq_exems_ref().id )?;
-        eprintln!( "ALREADY HAVE THE exems {}. id {}", glo_uniq_exems.data.vec.len(), exems.id );
+
+        let glo_uniq_exems = object_store.fetch_rs::<RefVec>(&mut record_store,
+                                                             exems.get_glo_uniq_exems_ref().id )?;
+        eprintln!( "LOADED exems FROM store {}. id {}", glo_uniq_exems.get_vec().len(), exems.id );
 
         return Ok(exems);
     }
 
-    eprintln!("opening {}", file_name);
+    eprintln!("reading exems from file {}", file_name);
     let reader = BufReader::new(File::open(file_name)?);
 
-    eprintln!("creating reserved vec");
     let mut cues: Vec<String> = Vec::with_capacity(10_000_000);
     let mut cue2idx: HashMap<String,u32> = HashMap::new();
 
@@ -109,14 +114,12 @@ fn load_exems(file_name: &str, object_store: &ObjectStore, config: &Config)
     let mut glo_uniq_exems_vec: Vec<Ref> = Vec::with_capacity(10_000_000);
 
     let mut needs_title = true;
-    eprintln!("reading articles");
-
 
     for line_result in reader.split(b'\n') {
         let line_bytes = line_result?;
         let line = String::from_utf8_lossy(&line_bytes);
         if needs_title {
-            println!("ARTICLE {}", line);
+            println!("READING ARTICLE {}", line);
             needs_title = false;
         } else {
             let line = line.to_lowercase();
@@ -286,8 +289,7 @@ fn find_cue_endpoints(freq: &Obj<U32Vec>,
         || config.min_overall_cue_perc > 0.0
         || config.max_overall_cue_perc  > 0.0
     {
-        let exem_count_int: &usize = exems.get_exem_count();
-        let exem_count: f32 = *exem_count_int as f32;
+        let exem_count: f32 = *(exems.get_exem_count()) as f32;
         for idx in 0..freq_vec.len() {
             if let Some(freq_int) = freq_vec.get(idx) {
                 let freq: f32 = *freq_int as f32;
@@ -319,242 +321,376 @@ fn find_cue_endpoints(freq: &Obj<U32Vec>,
             max_overall_cue_idx);
 }
 
-async fn find_coincs(exem_os: &ObjectStore, coinc_os: &ObjectStore, config: &Config)
-                     -> Result<Box<Obj<RefVec>>,RecordStoreError>
+fn find_coincs(exem_os: &ObjectStore,
+               coinc_os: &ObjectStore,
+               config: &Config)
+               -> Result<Box<Obj<RefVec>>,RecordStoreError>
 {
-    let binding = exem_os.record_store_binding();
-    let mut exem_rs = binding.lock().unwrap();
-    let mut exem_root = exem_os.fetch_root_rs(&mut exem_rs);
+    let exem_root = exem_os.fetch_root();
 
-    let binding = coinc_os.record_store_binding();
-    let mut coinc_rs = binding.lock().unwrap();
-    let mut coinc_root = coinc_os.fetch_root_rs(&mut coinc_rs);
+    let mut coinc_root = coinc_os.fetch_root();
+
+    eprintln!("FETCH ROOT ID {}", coinc_root.id );
 
     // coincs are stored in a data structure like so:
     //   [ { cue_idx => count, ... }, { cue_idx => count, .. }, ... ]
     //  where each idx in the vec is a cue idx
 
-    if let Some(ObjTypeOption::Bool(has_coincs)) = coinc_root.get("has_coincs") {
-        match coinc_root.get("coincs").expect("coincs") {
-            ObjTypeOption::Ref(coincs_ref) => {
+    if let Some(ObjTypeOption::Bool(_)) = coinc_root.get("has_coincs") {
+        let ObjTypeOption::Ref(coincs_ref) = coinc_root.get("coincs").unwrap() else {
+            return Err(RecordStoreError::ObjectStore("has_coincs, but no coincs found".to_string()));
+        };
+        let coincs = coinc_os.fetch::<RefVec>( coincs_ref.id )?;
+        eprintln!("Found {} coincs at id {}", coincs.get_vec().len(), coincs_ref.id );
+        return Ok(coincs);
+    }
 
-                let coincs = coinc_os.fetch_rs::<RefVec>(&mut coinc_rs, coincs_ref.id )?;
-                eprintln!("Found {} coincs", coincs.data.vec.len() );
-                return Ok(coincs);
+    eprintln!("Calculating coincs");
+
+    let ObjTypeOption::Ref(exems_ref) = exem_root.get("exems").unwrap() else {
+            return Err(RecordStoreError::ObjectStore("exems are missing".to_string()));
+    };
+    let exems = exem_os.fetch::<Exems>(exems_ref.id)?;
+
+    let exem_count: u32 = *exems.get_exem_count() as u32;
+    let loc_tot_freq = exem_os.fetch::<U32Vec>( exems.get_loc_tot_freq_ref().id )?;
+
+    // start_cue_idx, end_cue_idx are the ranges that coincs will be calcualted for
+    //   cues within the min_overall_cue_idx to max_overall_cue_idx range will be included others' coincs
+    //   but will not have coincs themselves
+    let (start_cue_idx, end_cue_idx, min_overall_cue_idx, max_overall_cue_idx)
+        = find_cue_endpoints( &loc_tot_freq, &exems, config );
+
+    // fill this up with empty u32hashmap objects and save it, then update
+    //    u32hashmap objects when calculating
+    let coincs = {
+        let mut coin = coinc_os.new_obj( RefVec { vec: Vec::new() } )?;
+        for cue_idx in start_cue_idx..end_cue_idx {
+            let mut map = coinc_os.new_obj( U32HashMap { hash: HashMap::new() } )?;
+            coin.data.vec.insert( cue_idx as usize, map.make_ref() );
+            let _ = coinc_os.save_obj( &mut map );
+        }
+        coinc_root.put("coincs", coin.make_ref_opt() );
+        let _ = coinc_os.save_obj( &mut coinc_root );
+        let _ = coinc_os.save_obj( &mut coin );
+        coin
+    };
+
+    let cue_chunks = chunk_cues_by_freq( loc_tot_freq.get_vec(), start_cue_idx, end_cue_idx );
+
+    let exem_chunk_size = if config.exem_chunk_size < exem_count { config.exem_chunk_size } else { exem_count };
+    let window_range = config.window_range;
+
+    let mut start_cue_idx = start_cue_idx;
+    let mut exem_idx: u32 = 0;
+
+    let rv = exem_os.fetch::<RefVec>( exems.get_glo_seq_exems_ref().id )?;
+    let exem_glo_seqs = rv.get_vec();
+    let rv = exem_os.fetch::<U32Vec>( exems.get_glo_to_loc_ref().id )?;
+    let glo_to_loc = rv.get_vec();
+
+    while exem_idx < exem_count {
+        let seq_chunk = Arc::new({
+            let mut chunk: Vec<Vec<u32>> = Vec::with_capacity(exem_chunk_size as usize);
+            for chunk_idx in 0..(exem_chunk_size-1) {
+                let v = exem_os.fetch::<U32Vec>( exem_glo_seqs.get( chunk_idx as usize ).expect("FOO").id)?;
+                let exem_glo_seq = v.get_vec();
+                chunk.push( exem_glo_seq.iter().map( |&glo_idx| { glo_to_loc[glo_idx as usize] } ).collect::<Vec<_>>());
+            }
+            chunk
+        });
+
+        exem_idx += exem_chunk_size;
+
+        let (tx, rx) = mpsc::channel::<(_,_)>();
+
+        let mut handles = Vec::new();
+
+        for cue_bunch in &cue_chunks {
+            let cue_idx_start_range = start_cue_idx;
+            let cue_idx_end_range = cue_idx_start_range + (cue_bunch - 1);
+            let chunk_size = (cue_idx_end_range - cue_idx_start_range) + 1;
+            start_cue_idx = cue_idx_end_range + 1;
+
+            //
+            // in thread
+            //
+            let tx_clone = tx.clone();
+
+            let seq_chunk = Arc::clone( &seq_chunk );
+
+            let handle = thread::spawn( move || {
+                //
+                // prep data structures
+                //
+
+                //
+                // a vec for the active cues where index 0 is cue_idx_start_range
+                //                                       1 is cue_idx_start_range + 1
+                //                                    etc until the last is cue_idx_end_range
+                //
+                let mut active_cueidx2coincs: Vec<HashMap<u32,u32>>
+                    = Vec::with_capacity( chunk_size as usize );
+
+                // fill with empty hashmaps
+                for _ in 0..chunk_size {
+                    //
+                    let hm: HashMap<u32,u32> = HashMap::with_capacity( 10_000 );
+                    active_cueidx2coincs.push( hm );
+
+                }
+
+                //
+                // find the coincs windowed exem
+                //
+                // exem_seq is Vec<u32>
+                for exem_seq in seq_chunk.iter() {
+                    let exem_seq_size: u32 = exem_seq.len() as u32;
+                    let mut window_endpoints: Vec<u32> = Vec::new();
+                    let mut has_start = false;
+                    let mut start: u32 = 0;
+                    let mut end: u32 = 0;
+
+                    for idx_in_seq in 0..exem_seq.len() {
+                        let cue_idx = exem_seq[idx_in_seq];
+
+                        // found an end
+                        if has_start &&
+                            idx_in_seq as u32 == end &&
+                            ! (cue_idx >= cue_idx_start_range && cue_idx <= cue_idx_end_range)
+                        {
+                            window_endpoints.push( start );
+                            window_endpoints.push( end );
+                            has_start = false;
+                        }
+
+                        // cue is in range of cues we are actively building windows from
+                        if cue_idx >= cue_idx_start_range && cue_idx <= cue_idx_end_range {
+                            if has_start {
+                                if (end + window_range) >= exem_seq_size {
+                                    end = exem_seq_size;
+                                } else {
+                                    end +=window_range;
+                                }
+                            } else {
+                                start = idx_in_seq as u32;
+                                has_start = true;
+                                end = start + 2 + window_range;
+                                if end >= exem_seq_size {
+                                    end = exem_seq_size;
+                                }
+                            }
+                        }
+                    }
+                    window_endpoints.reverse();
+
+                    while window_endpoints.len() > 0 {
+                        let start: usize = window_endpoints.pop().expect("FO") as usize;
+                        let end: usize = window_endpoints.pop().expect("FO") as usize;
+
+                        // sorted ascending
+                        let mut uniq_window_cues: Vec<u32> = exem_seq[start..end]
+                            .iter()
+                            .map(|v| *v)
+                            .filter(|v| v >= &min_overall_cue_idx && v <= &max_overall_cue_idx)
+                            .collect::<Vec<_>>();
+                        uniq_window_cues.sort_unstable();
+                        uniq_window_cues.dedup();
+
+                        let active_window_cues: Vec<u32> = uniq_window_cues.clone()
+                            .iter()
+                            .map(|v| *v)
+                            .filter(|v| v >= &cue_idx_start_range && v <= &cue_idx_end_range )
+                            .collect::<Vec<_>>();
+
+                        for active_cue_idx in &active_window_cues {
+                            for seq_cue_idx in &uniq_window_cues {
+                                if seq_cue_idx != active_cue_idx {
+                                    *active_cueidx2coincs[(*active_cue_idx - cue_idx_start_range) as usize].entry(*seq_cue_idx).or_insert(0) += 1;
+                                }
+                            }
+                        }
+                    } // for each window
+                } // find coincs in windowed exem
+
+                let result = (cue_idx_start_range, active_cueidx2coincs);
+                eprintln!("SEND for {}",cue_idx_start_range);
+                let _ = tx_clone.send(result).unwrap();
+            });
+            handles.push(handle);
+
+        } //each cue_bunch in cue_chunks
+
+        drop(tx);
+
+        // can now collect the results
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        for received in rx {
+            let (cue_idx_start_range, active_cueidx2coincs): (_, Vec<HashMap<u32,u32>>) = received;
+
+            for offset in 0..active_cueidx2coincs.len() {
+                let a_cue_idx = cue_idx_start_range as usize  + offset;
+
+                if let Some(delta_map) = active_cueidx2coincs.get(a_cue_idx) {
+                    let mut idx_coincs = coinc_os.fetch::<U32HashMap>(
+                        coincs.get_vec().get( a_cue_idx ).unwrap().id
+                    ).unwrap();
+                    for (b_cue_idx, count) in delta_map {
+                        *idx_coincs.data.hash.entry(*b_cue_idx).or_insert(0) += count;
+                    }
+                    let _ = coinc_os.save_obj( &mut idx_coincs );
+                }
+            }
+
+            eprintln!("received '{cue_idx_start_range}'");
+        }
+
+        eprintln!("done receiving");
+
+
+        eprintln!("receiver joined");
+
+    } // while there are exems to do
+
+    coinc_root.put("has_coincs", ObjTypeOption::Bool(true));
+    let _ = coinc_os.save_obj( &mut coinc_root );
+
+    Ok(coincs)
+}
+
+fn calculate_rate_scores(rates: &HashMap<u32,f64>,
+                         freqs: &Vec<u32>,
+                         sigma_bound: f32) 
+                         -> HashMap<u32,f32> {
+    let mut scores = HashMap::new();
+    
+    let stddev = rates.values().copied().collect::<Vec<f64>>().std_dev().round() as f32;
+    let avg = rates.values().copied().collect::<Vec<f64>>().mean().round() as f32;
+
+    if stddev > 0.0 {
+        for b in rates.keys() {
+            let brate = (*rates.get(b).unwrap()).round() as f32;
+            let sigma = ( brate - avg ) / stddev;
+            if sigma >= sigma_bound {
+                scores.insert( *b, (sigma.round() as f32) * (freqs[*b as usize] as f32) );
+            }
+        }
+    }
+    scores
+}
+
+fn calculate_cue_affinities(exem_os: &ObjectStore,
+                            coinc_os: &ObjectStore,
+                            affin_os: &ObjectStore
+                           // ,config: &Config
+                           )
+                            -> Result<Box<Obj<RefVec>>,RecordStoreError>
+{
+    let mut affin_root = affin_os.fetch_root();
+
+    if let Some(ObjTypeOption::Bool(_)) = affin_root.get("has_affinities") {
+        match affin_root.get("affins").unwrap() {
+            ObjTypeOption::Ref(affin_ref) => {
+                let affins = affin_os.fetch::<RefVec>( affin_ref.id )?;
+                eprintln!("Found {} affins at id {}", affins.get_vec().len(), affin_ref.id );
+                return Ok(affins);
             },
             _ => {
-                return Err(RecordStoreError::ObjectStore("has_coincs, but no coincs found".to_string()));
+                return Err(RecordStoreError::ObjectStore("has_affins, but no affins found".to_string()));
+            }
+         }
+    }
+
+
+
+    let coincs = {
+        let coinc_root = coinc_os.fetch_root();
+        if let Some(ObjTypeOption::Ref(coincs_ref)) = coinc_root.get("coincs") {
+            // RefVec -> U32HashMap 
+            let coin = coinc_os.fetch::<RefVec>( coincs_ref.id )?;
+            coin
+        } else {
+            panic!( "no coincs found" );
+        }
+    };
+    let end_cue_idx = coincs.get_vec().len();
+
+    let exems = {
+        let exem_root = exem_os.fetch_root();
+        if let Some(ObjTypeOption::Ref(exems_ref)) = exem_root.get("exems") {
+            let exem = exem_os.fetch::<Exems>( exems_ref.id )?;
+            exem
+        } else {
+            panic!( "no coincs found" );
+        }
+    };
+
+    let freqs = exem_os.fetch::<U32Vec>( exems.get_glo_exem_freq_ref().id )?;
+    let avg = freqs.get_vec().into_iter().map(|x| *x as f64).collect::<Vec<_>>().mean();
+    let min_freq = avg as f64 / 2.0;
+
+
+    // fill this up with empty u32hashmap objects and save it, then update
+    //    u32hashmap objects when calculating
+    let affinities = {
+        let mut aff = affin_os.new_obj( RefVec { vec: Vec::new() } )?;
+        for cue_idx in 0..end_cue_idx {
+            let mut map = affin_os.new_obj( U32F32HashMap { hash: HashMap::new() } )?;
+            aff.data.vec.insert( cue_idx as usize, map.make_ref() );
+            let _ = affin_os.save_obj( &mut map );
+        }
+        affin_root.put("affinities", aff.make_ref_opt() );
+        let _ = affin_os.save_obj( &mut affin_root );
+        let _ = affin_os.save_obj( &mut aff );
+        aff
+    };
+
+    // do the affinity calculations here
+    for local_a_idx in 0 .. end_cue_idx {
+        let a_coincs_ref = coincs.get_vec().get( local_a_idx ).unwrap();
+        let a_coincs = *coinc_os.fetch::<U32HashMap>(a_coincs_ref.id)?;
+        let a_coincs_hash = a_coincs.get_hash();
+        if a_coincs_hash.len() > 0 {
+            
+            let rates = {
+                let mut r: HashMap<u32,f64> = HashMap::new();
+                for local_b_idx in a_coincs_hash.keys() {
+                    if let Some(count) = a_coincs_hash.get(local_b_idx) {
+                        if *count > 0 {
+                            r.insert( *local_b_idx, if *count as f64 > min_freq { *count as f64 } else { min_freq } );
+                        }
+                    }
+                }
+                r
+            };
+
+            let scores = calculate_rate_scores( &rates, &freqs.get_vec(), 3.0 );
+
+            if scores.len() > 0 {
+                // transfer the data from scores to the affinites u32f32hashmap
+                let target = affin_os.fetch::<U32F32HashMap>(affinities.get_vec().get( local_a_idx ).unwrap().id)?;
+                let mut target_hash = target.data.hash;
+                for key in scores.keys() {
+                    target_hash.insert( *key, *scores.get(key).unwrap() );
+                }
             }
         }
     }
 
-    // get async stuff ready
-    let semaphore = Arc::new(Semaphore::new(10));
+    affin_root.put("affinities", ObjTypeOption::Bool(true));
+    affin_root.put("has_affinities", ObjTypeOption::Bool(true));
+    let _ = affin_os.save_obj( &mut affin_root );
 
-    if let Some(ObjTypeOption::Ref(exems_ref)) = exem_root.get("exems") {
-        let exems = exem_os.fetch_rs::<Exems>(&mut exem_rs, exems_ref.id)?;
-
-        let exem_count: u32 = *exems.get_exem_count() as u32;
-        let loc_tot_freq = exem_os.fetch_rs::<U32Vec>( &mut exem_rs, exems.get_loc_tot_freq_ref().id )?;
-
-        // start_cue_idx, end_cue_idx are the ranges that coincs will be calcualted for
-        //   cues within the min_overall_cue_idx to max_overall_cue_idx range will be included others' coincs
-        //   but will not have coincs themselves
-        let (start_cue_idx, end_cue_idx, min_overall_cue_idx, max_overall_cue_idx)
-            = find_cue_endpoints( &loc_tot_freq, &exems, config );
-/*
-        let cuestore = exem_os.fetch_rs::<CueStore>( &mut exem_rs, exems.get_cuestore_ref().id )?;
-        let cues = cuestore.get_cues();
-        let cue2idx = cuestore.get_cue2idx();
-*/
-        let mut coincs = coinc_os.new_obj_rs( &mut coinc_rs, RefVec { vec: Vec::new() } )?;
-        for cue_idx in start_cue_idx..end_cue_idx {
-            coincs.data.vec.insert( cue_idx as usize, coinc_os.new_obj_rs( &mut coinc_rs, U32HashMap { hash: HashMap::new() } )?.make_ref() );
-        }
-        coinc_root.put("coincs", coincs.make_ref_opt() );
-        coinc_os.save_obj_rs( &mut coinc_rs, &mut coincs );
-
-
-        let cue_chunks = chunk_cues_by_freq( loc_tot_freq.get_vec(), start_cue_idx, end_cue_idx );
-
-        let last_exem_idx: u32 = (if config.max_exems > 0 && config.max_exems <= exem_count { config.max_exems } else { exem_count } ) - 1;
-
-        let exem_chunk_size = if config.exem_chunk_size < exem_count { config.exem_chunk_size } else { exem_count };
-        let window_range = config.window_range;
-
-        let mut start_cue_idx = start_cue_idx;
-        let mut exem_idx: u32 = 0;
-
-        let exem_glo_seqs: Vec<Ref> = exem_os.fetch_rs::<RefVec>( &mut exem_rs, exems.get_glo_seq_exems_ref().id )?.data.vec;
-        let glo_to_loc: Vec<u32> = exem_os.fetch_rs::<U32Vec>( &mut exem_rs, exems.get_glo_to_loc_ref().id )?.data.vec;
-
-        while exem_idx < exem_count {
-            let mut seq_chunk: Box<Vec<Vec<u32>>> = Box::new(Vec::with_capacity(exem_chunk_size as usize));
-
-            for chunk_idx in 0..(exem_chunk_size-1) {
-                let exem_glo_seq = exem_os.fetch_rs::<U32Vec>( &mut exem_rs, exem_glo_seqs.get( chunk_idx as usize ).expect("FOO").id)?.data.vec;
-                seq_chunk.push( exem_glo_seq.iter().map( |&glo_idx| { glo_to_loc[glo_idx as usize] } ).collect::<Vec<_>>());
-            }
-
-            let seq_chunk = &seq_chunk;
-
-            exem_idx += exem_chunk_size;
-
-            let (tx, mut rx) = trpl::channel();
-
-            let mut futures = Vec::new();
-
-            for cue_bunch in &cue_chunks {
-                let cue_idx_start_range = start_cue_idx;
-                let cue_idx_end_range = cue_idx_start_range + cue_bunch;
-                let chunk_size = cue_idx_end_range - cue_idx_start_range;
-                start_cue_idx = cue_idx_end_range + 1;
-
-                //
-                // in thread
-                //
-                let sem = semaphore.clone();
-                let tx_clone = tx.clone();
-
-                let future = async move {
-                    let _permit = sem.acquire_owned().await.unwrap();
-
-                    //
-                    // prep data structures
-                    //
-
-                    //
-                    // a vec for the active cues where index 0 is cue_idx_start_range
-                    //                                       1 is cue_idx_start_range + 1
-                    //                                    etc until the last is cue_idx_end_range
-                    //
-                    let mut active_cueidx2coincs: Vec<HashMap<u32,u32>> = Vec::with_capacity( chunk_size as usize );
-
-                    // fill with empty hashmaps
-                    for idx in 0..chunk_size {
-                        //
-                        let hm: HashMap<u32,u32> = HashMap::with_capacity( 10_000 );
-                        active_cueidx2coincs.push( hm );
-                    }
-
-                    //
-                    // find the coincs windowed exem
-                    //
-                    // exem_seq is Vec<u32>
-                    for exem_seq in seq_chunk.iter() {
-                        let exem_seq_size: u32 = exem_seq.len() as u32;
-                        let mut window_endpoints: Vec<u32> = Vec::new();
-                        let mut has_start = false;
-                        let mut start: u32 = 0;
-                        let mut end: u32 = 0;
-                        let mut last_end: u32 = 0;
-
-                        for idx_in_seq in 0..exem_seq.len() {
-                            let cue_idx = exem_seq[idx_in_seq];
-
-                            // found an end
-                            if has_start &&
-                                idx_in_seq as u32 == end &&
-                                ! (cue_idx >= cue_idx_start_range && cue_idx <= cue_idx_end_range)
-                            {
-                                window_endpoints.push( start );
-                                window_endpoints.push( end );
-                                last_end = end;
-                                has_start = false;
-                            }
-
-                            // cue is in range of cues we are actively building windows from
-                            if cue_idx >= cue_idx_start_range && cue_idx <= cue_idx_end_range {
-                                if has_start {
-                                    if (end + window_range) >= exem_seq_size {
-                                        end = exem_seq_size;
-                                    } else {
-                                        end +=window_range;
-                                    }
-                                } else {
-                                    start = idx_in_seq as u32;
-                                    has_start = true;
-                                    end = start + 2 + window_range;
-                                    if end >= exem_seq_size {
-                                        end = exem_seq_size;
-                                    }
-                                }
-                            }
-                        }
-                        window_endpoints.reverse();
-
-                        while window_endpoints.len() > 0 {
-                            let end: usize = window_endpoints.pop().expect("FO") as usize;
-                            let start: usize = window_endpoints.pop().expect("FO") as usize;
-
-                            // sorted ascending
-                            let mut uniq_window_cues: Vec<u32> = exem_seq[start..end]
-                                .iter()
-                                .map(|v| *v)
-                                .filter(|v| v >= &min_overall_cue_idx && v <= &max_overall_cue_idx)
-                                .collect::<Vec<_>>();
-                            uniq_window_cues.sort_unstable();
-                            uniq_window_cues.dedup();
-
-                            let active_window_cues: Vec<u32> = uniq_window_cues.clone()
-                                .iter()
-                                .map(|v| *v)
-                                .filter(|v| v >= &cue_idx_start_range && v <= &cue_idx_end_range )
-                                .collect::<Vec<_>>();
-
-                            for active_cue_idx in &active_window_cues {
-                                for seq_cue_idx in &uniq_window_cues {
-                                    if seq_cue_idx != active_cue_idx {
-                                        *active_cueidx2coincs[(*active_cue_idx - cue_idx_start_range) as usize].entry(*seq_cue_idx).or_insert(0) += 1;
-                                    }
-                                }
-                            }
-                        } // for each window
-                    } // find coincs in windowed exem
-
-                    let result = (cue_idx_start_range, active_cueidx2coincs);
-
-                    tx_clone.send(result);
-
-                };
-                futures.push(Box::pin(future)); // async for this iteration
-
-            } //each cue_bunch in cue_chunks
-
-            let rx_fut = async {
-                while let Some(value) = rx.recv().await {
-                    let (cue_idx_start_range, active_cueidx2coincs) = value;
-                    for offset in 0..active_cueidx2coincs.len() {
-                        let a_cue_idx = cue_idx_start_range as usize  + offset;
-                        if let Some(delta_map) = active_cueidx2coincs.get(a_cue_idx) {
-                            let mut idx_coincs = exem_os.fetch_rs::<U32HashMap>( &mut exem_rs, coincs.data.vec.get( a_cue_idx ).expect("damn").id ).expect("Foo");
-                            for (b_cue_idx, count) in &active_cueidx2coincs[a_cue_idx] {
-                                *idx_coincs.data.hash.entry(*b_cue_idx).or_insert(0) += count;
-                            }
-                            exem_os.save_obj_rs( &mut exem_rs, &mut idx_coincs );
-                        }
-                    }
-                    eprintln!("received '{cue_idx_start_range}'");
-                }
-            };
-
-            // can now collect the results
-            trpl::join_all( futures ).await;
-            eprintln!("all futures joined");            
-        } // while there are exems to do
-
-        
-        
-    } //got the exems
-
-    Err(RecordStoreError::ObjectStore("HBEEEL".to_string()))
+    Ok(affinities)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
 
     let conf = Config {
-        max_exems: 10,
+        max_exems: 1_000,
         exem_chunk_size: 100_000,
         window_range: 7,
 
@@ -575,15 +711,20 @@ async fn main() {
 
 // no word limits: 943M	data, 910M wtih limits
 
-    let exem_os = ObjectStore::new("./data/exems");
+    let exem_os  = ObjectStore::new("./data/exems");
     let coinc_os = ObjectStore::new("./data/coinc");
+    let affin_os = ObjectStore::new("./data/affin");
 
     let exems = load_exems("./source_data/all_articles.txt", &exem_os, &conf).expect("got exems");
-    eprintln!("GOT EXEMS");
     let seq_exems = exem_os.fetch::<RefVec>( exems.get_glo_seq_exems_ref().id ).expect("No way");
-    eprintln!(" exems howmany ? {}", seq_exems.data.vec.len() );
 
-//    find_coincs( &exem_os, &coinc_os, &conf ).await.expect("could not coincs");
+    eprintln!(" exems howmany ? {}", seq_exems.get_vec().len() );
+if false {
+
+    find_coincs( &exem_os, &coinc_os, &conf ).expect("could not coincs");
+
+//    calculate_cue_affinities( &coinc_os, &affin_os ).expect("could not affin");
 
     println!("HI");
+}
 }

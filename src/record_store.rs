@@ -138,7 +138,7 @@ impl RecordStore {
     ///
     pub fn fetch(&mut self, id: usize) -> Result<Option<Vec<u8>>,RecordStoreError> {
         let _ = self.index_silo.open();
-        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore("stow: unable to find index record for {id}".to_string()))?;
+        let index_record = self.index_silo.fetch_record( id ).ok_or(RecordStoreError::RecordStore(format!("stow: unable to find index record for {}", id ).to_string()))?;
         let silo_idx = index_record.silo_idx;
         let idx_in_silo = index_record.idx_in_silo;
         if let Some(data_silo) = self.data_silos.get_mut(silo_idx) {
