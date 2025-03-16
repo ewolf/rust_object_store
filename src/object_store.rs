@@ -74,6 +74,7 @@ pub trait ObjectType {
     fn name() -> String;
     fn create_from_bytes(bytes: &[u8]) -> Box<Self>;
 }
+
 // Separate trait for serialization/deserialization
 pub trait Serializable: Serialize + for<'de> Deserialize<'de> {}
 
@@ -192,17 +193,27 @@ impl ObjectStore {
     ///
     ///
     ///
-    pub fn save_obj<T: ObjectType>(&self,obj: &Obj<T>) -> Result<(),RecordStoreError> {
-        let serialized_bytes = obj.to_bytes();
-        let wrapper = SaveWrapper {
-            name: &T::name(),
-            bytes: &serialized_bytes,
-        };
-        let binding = get_record_store( &self.base_dir );
-        let mut record_store = binding.lock().unwrap();
-        let serialized_bytes = bincode::serialize(&wrapper).unwrap();
-//        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
-        record_store.stow( obj.id as usize, &serialized_bytes )?;
+    pub fn save_obj<T: ObjectType>(&self,obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
+        if obj.dirty {
+            let binding = get_record_store( &self.base_dir );
+            let mut record_store = binding.lock().unwrap();
+            let _ = self._save_obj( &mut record_store, obj );
+        }
+        Ok(())
+    }
+
+    pub fn _save_obj<T: ObjectType>(&self, record_store:&mut RecordStore, obj: &mut Obj<T>) -> Result<(),RecordStoreError> {
+        if obj.dirty {
+            let serialized_bytes = obj.to_bytes();
+            let wrapper = SaveWrapper {
+                name: &T::name(),
+                bytes: &serialized_bytes,
+            };
+            let serialized_bytes = bincode::serialize(&wrapper).unwrap();
+            //        println!( "Got bytes {}", serialized_bytes.to_vec().len() );
+            record_store.stow( obj.id as usize, &serialized_bytes )?;
+            obj.dirty = false;
+        }
         Ok(())
     }
 
@@ -250,17 +261,14 @@ impl ObjectStore {
         //        println!( "current count is {}", record_store.current_count() );
         if record_store.current_count() == 0 {
             let _ = record_store.next_id().expect("unable to create root id");
-            let new_root = Obj::new(HashMapObjectType::new());
+            let mut new_root = Obj::new(HashMapObjectType::new());
             // id is already 0
-            self.save_obj::<HashMapObjectType>(&new_root).expect("unable to save the root");
+            self._save_obj::<HashMapObjectType>(&mut record_store, &mut new_root).expect("unable to save the root");
 
             return Box::new(new_root)
         }
-        eprintln!( "getting" );
         let hmot: Box<HashMapObjectType> = self._fetch::<HashMapObjectType>(&mut record_store,0).expect("unable to fetch the root").data as Box<HashMapObjectType>;
-        eprintln!( "got hmot" );
         let root = Obj::new_from_boxed(hmot);
-                eprintln!( "got root finally" );
         Box::new(root)
     }
 /*
@@ -341,6 +349,7 @@ pub struct HashMapObjectType {
 impl Serializable for HashMapObjectType {}
 pub trait HashMapObjectTypeExt {
     fn get(&self, key: &str) -> Option<&ObjectTypeOption>;
+    fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjectTypeOption) -> &ObjectTypeOption;
     fn put(&mut self, key: &str, val: ObjectTypeOption);
 }
 impl HashMapObjectType {
@@ -353,6 +362,9 @@ impl HashMapObjectType {
 impl HashMapObjectTypeExt for Box<Obj<HashMapObjectType>> {
     fn get(&self, key: &str) -> Option<&ObjectTypeOption> {
         self.data.hashmap.get(key)
+    }
+    fn get_default(&mut self, key: &str, default: &dyn Fn() -> ObjectTypeOption ) -> &ObjectTypeOption {
+        self.data.hashmap.entry(key.to_string()).or_insert_with( default )
     }
     fn put(&mut self, key: &str, val: ObjectTypeOption) {
         self.data.hashmap.insert(key.to_string(), val);
