@@ -35,7 +35,61 @@ use recordstore_macros::{init_objects,Getters};
 
 use std::collections::HashMap;
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum ObjectTypeOption {
+    Bool(bool),
+    I32(i32),
+    I64(i64),
+    U32(u32),
+    U64(u64),
+    F32(f32),
+    F64(f64),
+    String(String),
+}
+
 init_objects!();
+/*
+use std::collections::HashMap;
+use std::sync::RwLock;
+use once_cell::sync::Lazy;
+use ctor::ctor;
+
+// Type alias for the closure
+type MyFn = Box<dyn Fn() -> String + Send + Sync>;
+// The global, lazy-initialized map
+static REGISTRY: Lazy<RwLock<HashMap<String, MyFn>>> = Lazy::new(|| {
+    RwLock::new(HashMap::new())
+});
+
+// Function to register a new item
+fn register(name: &str, f: MyFn) {
+    let mut map = REGISTRY.write().unwrap();
+    map.insert(name.to_string(), f);
+}
+
+// Use ctor to add entries at startup
+#[ctor]
+fn register_hello() {
+    register("hello", Box::new(|| "Hello from closure!".to_string()));
+}
+
+#[ctor]
+fn register_world() {
+    register("world", Box::new(|| "Another one!".to_string()));
+}
+
+fn main() {
+    let map = REGISTRY.read().unwrap();
+
+    if let Some(f) = map.get("hello") {
+        println!("{}", f());
+    }
+
+    if let Some(f) = map.get("world") {
+        println!("{}", f());
+    }
+}
+*/
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 struct SaveWrapper<'a> {
@@ -134,6 +188,15 @@ println!("fetch {} got {} bytes", id, bytes.to_vec().len());
         let obj = Obj::from_bytes(&wrapper.bytes, id);
         Ok(Box::new(obj))
     }
+/*
+    fn fetch_getter(&mut self, id: u64) -> Result<SaveWrapper,RecordStoreError> {
+        let bytes = self.record_store.fetch( id as usize )?.unwrap();
+        println!("fetch {} got {} bytes", id, bytes.to_vec().len());
+        let wrapper: SaveWrapper = bincode::deserialize(&bytes)?;
+        wrapper.name
+        Ok(wrapper)
+    }
+*/
 
     ///
     ///
@@ -277,21 +340,9 @@ struct Canary {
 }
 */
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum ObjectTypeOption {
-    Bool(bool),
-    I32(i32),
-    I64(i64),
-    U32(u32),
-    U64(u64),
-    F32(f32),
-    F64(f64),
-    String(String),
-}
-
 #[derive(Serialize, Deserialize, Debug, Getters)]
 pub struct VecObjectType {
-    pub vec: Vec<ObjectTypeOption>
+    vec: Vec<ObjectTypeOption>,
 }
 impl VecObjectType {
     pub fn new() -> Self {

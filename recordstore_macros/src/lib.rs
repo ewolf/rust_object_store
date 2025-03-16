@@ -1,6 +1,16 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
+use proc_macro2::Ident;
+use quote::ToTokens;
+
+fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
 
 #[proc_macro]
 pub fn init_objects(_input: TokenStream) -> TokenStream {
@@ -88,6 +98,41 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
             .into();
     };
 
+    // generate lookup_field method, first with ifs  if x == 'foo' {}, if {}
+    let ifs = fields.iter().filter_map(|field| {
+        if let Some(field_name) = &field.ident {
+            if field_name != "hashmap" && field_name != "vec" {
+                let field_type = &field.ty;
+                let field_name_str = format!( "{}", field_name );
+                let cap_type = capitalize_first(&field_type.into_token_stream().to_string());
+                let type_ident = Ident::new(&cap_type, proc_macro2::Span::call_site());
+                if cap_type == "String" {
+                    Some(quote! {
+                        if name == #field_name_str {
+                            return Some(ObjectTypeOption::#type_ident(String::from(&self.data.#field_name)));
+                        }
+                    })
+                } else {
+                    Some(quote! {
+                        if name == #field_name_str {
+                            return Some(ObjectTypeOption::#type_ident(self.data.#field_name));
+                        }
+                    })
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+    let lookup_field_fun = quote! {
+        fn lookup_field(&self,name: String) -> Option<ObjectTypeOption> {
+            #(#ifs)*
+            None
+        }
+    };
+
     // Generate getter methods
     let getters = fields.iter().filter_map(|field| {
         if let Some(field_name) = &field.ident {
@@ -104,10 +149,15 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
         }
     });
 
+    let struct_name_str = format!( "{}", struct_name );
+
     // Generate the `impl` block
     let expanded = quote! {
         impl Obj<#struct_name> {
             #(#getters)*
+        }
+        impl Obj<#struct_name> {
+            #lookup_field_fun
         }
         impl ObjectType for #struct_name {
             fn as_any(&self) -> &dyn Any {
@@ -117,7 +167,7 @@ pub fn derive_getters(input: TokenStream) -> TokenStream {
                 bincode::serialize(self).expect("Failed to Serialize")
             }
 
-            fn name() -> String { "#struct_name".to_string() }
+            fn name() -> String { #struct_name_str.to_string() }
 
             fn create_from_bytes(bytes: &[u8]) -> Box<Self> {
                 let deserialized: Self = bincode::deserialize(bytes).expect("Failed to deserialize");
