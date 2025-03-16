@@ -31,7 +31,6 @@ also if let Some(a) = obj_from_bytes.data.as_any().downcast_ref::<A>()
 //!
 use crate::record_store::RecordStore;
 use crate::silo::RecordStoreError;
-use recordstore_macros::{init_objects,Getters};
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -462,10 +461,11 @@ struct Canary {
 }
 */
 
-#[derive(Serialize, Deserialize, Debug, Getters)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct VecObjectType {
     vec: Vec<ObjectTypeOption>,
 }
+impl Serializable for VecObjectType {}
 impl VecObjectType {
     pub fn new() -> Self {
         VecObjectType {
@@ -473,19 +473,43 @@ impl VecObjectType {
         }
     }
 }
+pub trait VecObjectTypeExt {
+    fn get(&self, key: usize) -> Option<&ObjectTypeOption>;
+    fn put(&mut self, key: usize, val: ObjectTypeOption);
+}
 
-impl Obj<VecObjectType> {
-    pub fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
+impl VecObjectTypeExt for Obj<VecObjectType> {
+    fn get(&self, key: usize) -> Option<&ObjectTypeOption> {
         self.data.vec.get(key)
     }
-    pub fn put(&mut self, key: usize, val: ObjectTypeOption) {
+    fn put(&mut self, key: usize, val: ObjectTypeOption) {
         self.data.vec.insert(key, val);
     }
 }
+impl ObjectType for VecObjectType {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("Failed to Serialize")
+    }
 
-#[derive(Serialize, Deserialize, Debug, Getters)]
+    fn name() -> String { "VecObjectType".to_string() }
+
+    fn create_from_bytes(bytes: &[u8]) -> Box<Self> {
+        let deserialized: Self = bincode::deserialize(bytes).expect("Failed to deserialize");
+        Box::new(deserialized)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct HashMapObjectType {
     pub hashmap: HashMap<String,ObjectTypeOption>
+}
+impl Serializable for HashMapObjectType {}
+pub trait HashMapObjectTypeExt {
+    fn get(&self, key: String) -> Option<&ObjectTypeOption>;
+    fn put(&mut self, key: String, val: ObjectTypeOption);
 }
 impl HashMapObjectType {
     pub fn new() -> Self {
@@ -494,11 +518,26 @@ impl HashMapObjectType {
         }
     }
 }
-impl Obj<HashMapObjectType> {
-    pub fn get(&self, key: String) -> Option<&ObjectTypeOption> {
+impl HashMapObjectTypeExt for Box<Obj<HashMapObjectType>> {
+    fn get(&self, key: String) -> Option<&ObjectTypeOption> {
         self.data.hashmap.get(&key)
     }
-    pub fn put(&mut self, key: String, val: ObjectTypeOption) {
+    fn put(&mut self, key: String, val: ObjectTypeOption) {
         self.data.hashmap.insert(key, val);
+    }
+}
+impl ObjectType for HashMapObjectType {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("Failed to Serialize")
+    }
+
+    fn name() -> String { "HashMapObjectType".to_string() }
+
+    fn create_from_bytes(bytes: &[u8]) -> Box<Self> {
+        let deserialized: Self = bincode::deserialize(bytes).expect("Failed to deserialize");
+        Box::new(deserialized)
     }
 }
